@@ -29,4 +29,7 @@ dist/
 .idea/
 .vscode/
 Thumbs.db
-Desktop.ini
+Desktop.ini、
+
+# Test screenshots
+tests/fixtures/latest_capture.png

@@ -23,3 +23,23 @@ This repository currently contains only the initial architecture scaffold. Busin
 - `modules/`: bounded implementation areas for capture, parsing, OCR, retrieval, answering, coordinate mapping, action execution, and review UI.
 - `docs/`: architecture, contracts, module boundaries, frozen-module policy, changelog, and agent prompts.
 - `tests/`: integration tests and fixtures.
+
+## Window Capture Panel
+
+Run the first module on Windows with:
+
+```powershell
+python -m modules.window_capture.panel
+```
+
+The panel lists visible windows, excluding the current foreground window at refresh time. When several windows have the same title, use the `hwnd`, `class_name`, `process_id`, and current `x,y,width,height` columns to choose the correct target. Anchor sizing is fixed from `config/anchor_profile.json` as `base_width/base_height * scale`; supported scales are `1`, `1.25`, and `1.5`.
+
+- `Scale`: choose the fixed AnchorFrame multiplier.
+- `Use Current Window Position as Anchor Origin`: save only the selected hwnd's current `x/y` origin to `config/anchor_profile.json`, and save its title/class identity to `config/target_profile.json`.
+- `Select Saved Target`: select the visible window that uniquely matches `config/target_profile.json`.
+- `Snap`: move and resize the selected hwnd to the saved AnchorFrame from `config/anchor_profile.json`.
+- `Lock`: snap the selected hwnd and keep restoring only that hwnd if it moves or resizes.
+- `Unlock`: stop the restore loop.
+- `Capture`: save the saved AnchorFrame region to `tests/fixtures/latest_capture.png`.
+
+The always-on-top AnchorFrame overlay is blue when an AnchorFrame exists but no target is locked, and green when the selected target hwnd is locked and being enforced inside the AnchorFrame.
