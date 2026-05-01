@@ -1,0 +1,6 @@
+# Default ownership for future review routing.
+* @architect-agent
+
+/docs/ @architect-agent
+/modules/ @builder-agent
+/tests/ @reviewer-agent

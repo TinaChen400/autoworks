@@ -1,0 +1,17 @@
+[project]
+name = "autoworks"
+version = "0.1.0"
+description = "Windows-based KVM visual survey automation assistant scaffold"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "modules"]
+python_files = ["test_*.py", "*_test.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
