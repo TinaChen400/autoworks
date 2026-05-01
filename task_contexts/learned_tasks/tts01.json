@@ -1,0 +1,42 @@
+{
+  "task_id": "tts01",
+  "task_type": "survey_image_task",
+  "task_family": "image_recognition_family",
+  "inherits": [
+    "base_templates/base_survey.json",
+    "base_templates/base_image_task.json",
+    "task_families/image_recognition_family.json"
+  ],
+  "supported_question_types": [
+    "single_choice",
+    "multiple_choice",
+    "image_choice",
+    "image_reasoning",
+    "text_input",
+    "unknown"
+  ],
+  "crop_margins": {
+    "top": 0,
+    "bottom": 0,
+    "left": 0,
+    "right": 0
+  },
+  "layout_memory": {
+    "summary": "tts01 uses a full captured AnchorFrame. First version sends the full frame as ModelInputRegion unless margins are configured.",
+    "regions": {
+      "raw_screenshot": "Full AnchorFrame capture from window_capture.",
+      "content_region": "Useful remote page content after configured crop margins.",
+      "model_input_region": "Region intended for later multimodal parsing."
+    }
+  },
+  "visual_parsing_rules": [
+    "Expect image-related content to be important when visible.",
+    "Do not assume recurring answer positions from earlier runs."
+  ],
+  "answer_rules": [
+    "Prefer human review when image evidence is unclear or missing."
+  ],
+  "confidence_rules": [
+    "Require review when the selected answer depends on fine visual details."
+  ]
+}

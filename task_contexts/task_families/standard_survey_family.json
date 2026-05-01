@@ -1,0 +1,13 @@
+{
+  "family_id": "standard_survey_family",
+  "task_family": "standard_survey_family",
+  "layout_memory": {
+    "family_summary": "Common survey flow with question body in the content area and navigation at the bottom or side."
+  },
+  "visual_parsing_rules": [
+    "Prefer reading top-to-bottom and left-to-right unless the layout clearly groups elements otherwise."
+  ],
+  "answer_rules": [
+    "Keep answer behavior consistent across repeated survey pages."
+  ]
+}

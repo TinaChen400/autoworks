@@ -1,0 +1,22 @@
+{
+  "template_id": "base_image_task",
+  "task_type": "image_task",
+  "supported_question_types": [
+    "image_choice",
+    "image_reasoning"
+  ],
+  "layout_memory": {
+    "media_summary": "Image tasks may use one central content image or multiple image options."
+  },
+  "visual_parsing_rules": [
+    "Identify image_content separately from image_option.",
+    "Associate image options with their nearest labels or controls.",
+    "Mark image ambiguity for human review rather than guessing."
+  ],
+  "answer_rules": [
+    "For image reasoning, explain uncertainty before recommending an answer in later modules."
+  ],
+  "confidence_rules": [
+    "Lower confidence if image content is small, cropped, blurred, or visually ambiguous."
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "template_id": "base_form_task",
+  "task_type": "form_task",
+  "supported_question_types": [
+    "form_field",
+    "text_input",
+    "number_input",
+    "date_input",
+    "dropdown",
+    "file_upload"
+  ],
+  "visual_parsing_rules": [
+    "Identify each form_field with its visible label.",
+    "Separate input placeholders from actual question or field labels."
+  ],
+  "answer_rules": [
+    "Do not invent profile, contact, identity, or payment information."
+  ],
+  "confidence_rules": [
+    "Require human review for identity, contact, financial, medical, or legal fields."
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "family_id": "form_filling_family",
+  "task_family": "form_filling_family",
+  "layout_memory": {
+    "family_summary": "Tasks that require mapping labels to editable fields."
+  },
+  "visual_parsing_rules": [
+    "Preserve form field order and label associations."
+  ],
+  "answer_rules": [
+    "Use explicit local user data only after that data source is available and approved."
+  ]
+}

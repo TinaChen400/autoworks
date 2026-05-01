@@ -1,0 +1,18 @@
+{
+  "template_id": "base_audio_task",
+  "task_type": "audio_task",
+  "supported_question_types": [
+    "audio_choice",
+    "audio_input"
+  ],
+  "visual_parsing_rules": [
+    "Identify visible audio controls as audio_content.",
+    "Do not infer transcript content from audio controls."
+  ],
+  "answer_rules": [
+    "Require human review when the answer depends on audio content until audio parsing exists."
+  ],
+  "confidence_rules": [
+    "Low confidence when audio content is required but unavailable."
+  ]
+}

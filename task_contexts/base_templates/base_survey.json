@@ -1,0 +1,40 @@
+{
+  "template_id": "base_survey",
+  "task_type": "survey",
+  "supported_question_types": [
+    "single_choice",
+    "multiple_choice",
+    "text_input",
+    "number_input",
+    "dropdown",
+    "rating_scale",
+    "matrix_single",
+    "matrix_multiple",
+    "unknown"
+  ],
+  "layout_memory": {
+    "summary": "Survey pages may contain one or more question blocks, instruction text, answer controls, and navigation buttons."
+  },
+  "visual_parsing_rules": [
+    "Treat the main question wording as question_stem.",
+    "Treat helper copy, examples, constraints, or task instructions as instruction_text.",
+    "Keep navigation controls separate from answer options."
+  ],
+  "answer_rules": [
+    "Answer only from visible page context and later approved local user knowledge.",
+    "Do not choose an option until the parsed question and option association are clear."
+  ],
+  "output_schema_rules": [
+    "Return structured fields that can be reviewed before any action is taken.",
+    "Represent unknown or ambiguous question types as unknown."
+  ],
+  "confidence_rules": [
+    "Lower confidence when question text, option text, or option grouping is unclear.",
+    "Require human review for sensitive or personally identifying answers."
+  ],
+  "do_not_rules": [
+    "Do not store fixed answer coordinates.",
+    "Do not click or trigger navigation.",
+    "Do not call OCR or multimodal models from context_mapper."
+  ]
+}

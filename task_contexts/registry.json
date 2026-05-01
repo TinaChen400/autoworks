@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "tasks": {
+    "tts01": {
+      "path": "learned_tasks/tts01.json",
+      "task_family": "image_recognition_family",
+      "task_type": "survey_image_task",
+      "description": "Standard survey page with image recognition or image reasoning content."
+    }
+  }
+}

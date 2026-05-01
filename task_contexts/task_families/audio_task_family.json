@@ -1,0 +1,13 @@
+{
+  "family_id": "audio_task_family",
+  "task_family": "audio_task_family",
+  "layout_memory": {
+    "family_summary": "Tasks with visible audio players, audio choices, or audio-dependent input."
+  },
+  "visual_parsing_rules": [
+    "Detect audio player controls as page elements, not answers unless explicitly selectable."
+  ],
+  "answer_rules": [
+    "Require review when the task cannot be answered from visible text alone."
+  ]
+}

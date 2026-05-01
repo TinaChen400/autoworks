@@ -1,0 +1,19 @@
+{
+  "template_id": "base_matrix_task",
+  "task_type": "matrix_task",
+  "supported_question_types": [
+    "matrix_single",
+    "matrix_multiple",
+    "rating_scale"
+  ],
+  "visual_parsing_rules": [
+    "Identify matrix rows and columns separately.",
+    "Associate each selectable control with its row and column labels."
+  ],
+  "answer_rules": [
+    "Do not collapse multiple matrix rows into one answer."
+  ],
+  "confidence_rules": [
+    "Lower confidence when row or column labels are visually misaligned."
+  ]
+}

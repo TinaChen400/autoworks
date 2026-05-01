@@ -33,3 +33,6 @@ Desktop.ini、
 
 # Test screenshots
 tests/fixtures/latest_capture.png
+
+# Runtime state
+runtime_state/

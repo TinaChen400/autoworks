@@ -1,0 +1,14 @@
+{
+  "family_id": "image_recognition_family",
+  "task_family": "image_recognition_family",
+  "layout_memory": {
+    "family_summary": "Survey tasks that ask about visible images, image choices, or image-based reasoning."
+  },
+  "visual_parsing_rules": [
+    "Capture relationships among the question stem, any image content, and each answer option.",
+    "When images are options, record each option as both image_option and answer_option if selectable."
+  ],
+  "answer_rules": [
+    "Flag image/audio ambiguity for human review before action."
+  ]
+}
