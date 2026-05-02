@@ -36,3 +36,6 @@ tests/fixtures/latest_capture.png
 
 # Runtime state
 runtime_state/
+
+# Secrets
+config/secrets.json

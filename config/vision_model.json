@@ -1,0 +1,9 @@
+{
+  "provider": "doubao",
+  "model_name": "doubao-seed-1.8-vision",
+  "mode": "fake",
+  "timeout_seconds": 180,
+  "temperature": 0.1,
+  "response_format": "json",
+  "secrets_file": "config/secrets.json"
+}
