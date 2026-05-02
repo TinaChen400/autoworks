@@ -1,0 +1,14 @@
+{
+  "ocr_backend": "disabled",
+  "crop_margin_percent": 0.08,
+  "crop_margin_min_px": 40,
+  "min_element_area_px": 80,
+  "max_element_area_ratio": 0.40,
+  "annotate_regions": true,
+  "annotate_elements": true,
+  "annotate_text_blocks": true,
+  "show_browser_elements": false,
+  "show_low_confidence_elements": false,
+  "show_removed_card_candidates": false,
+  "min_element_confidence_for_annotation": 0.35
+}
