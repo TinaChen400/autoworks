@@ -1,0 +1,11 @@
+{
+  "require_human_review_by_default": true,
+  "allow_local_rule_answers": true,
+  "allow_llm_answerer": false,
+  "minimum_confidence_without_review": 0.85,
+  "personal_fact_questions_require_evidence": true,
+  "all_of_the_above_requires_all_evidence": true,
+  "answer_tone": "honest, concise, natural",
+  "language": "English",
+  "style": "simple British English"
+}
