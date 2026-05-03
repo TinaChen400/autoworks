@@ -85,3 +85,39 @@ python -m pytest modules/context_mapper/tests
 - `ModelInputRegion`: the region later intended for multimodal parsing.
 
 Future task learning can reuse this module by creating a draft task context from a reviewed screenshot parse, extracting reusable layout and answer rules, selecting a task family, and saving only general rules. Fixed answer coordinates are intentionally rejected from reusable task memory.
+
+## Perception Indexer
+
+The fourth module builds a local visual radar map from the latest captured screenshot. It uses local image processing only: no Doubao calls, no multimodal model calls, no answer decisions, and no mouse actions. The output gives later `parse_orchestrator` and `vision_parser` stable region, element, and optional OCR text IDs to refer to instead of relying only on model-estimated coordinates.
+
+Run the CLI after `context_mapper` has written `runtime_state/latest_runtime_context.json`:
+
+```powershell
+python -m modules.perception_indexer.indexer --ocr disabled
+```
+
+Open the Tkinter panel:
+
+```powershell
+python -m modules.perception_indexer.panel
+```
+
+Runtime outputs:
+
+- `runtime_state/latest_layout_index.json`: structured layout index with `R*` region IDs, `E*` element IDs, optional `T*` OCR text IDs, relationships, layout hints, and crop safety metadata.
+- `runtime_state/latest_annotated_overview.png`: full screenshot overview annotated with region, element, and text IDs.
+- `runtime_state/crops/`: focused region crops and annotated crop variants.
+- `runtime_state/latest_perception_report.json`: counts, warnings, OCR backend, and output paths.
+
+The indexer detects a conservative `web_viewport` region and then creates card or form-section regions when local geometry suggests business sections. With OCR disabled these card labels are heuristic; with OCR enabled, section titles and field labels can produce `T*` text blocks and stronger text-to-region or text-to-element relationships.
+
+`parse_orchestrator` can later use this index to choose whether to send the full screenshot, annotated overview, or a focused crop to a parser. Crops are only acceleration inputs; the full screenshot is always preserved and referenced. Each crop includes safety hints for the risk of cropping out question context, answer options, input fields, or navigation buttons.
+
+Known limitations:
+
+- MVP element detection is heuristic and local-image based.
+- OCR is optional and may be inaccurate depending on the backend.
+- Candidate boxes are hints, not final semantic truth.
+- Crops do not replace the full screenshot.
+- No answers are decided.
+- No mouse or keyboard actions are executed.
