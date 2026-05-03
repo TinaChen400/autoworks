@@ -50,6 +50,7 @@ def select_strategy(
     *,
     mode: str | None = None,
     parser_type: str = "auto",
+    output_level: str | None = None,
     max_model_calls: int | None = None,
 ) -> tuple[ParsePlan, StrategyDecision]:
     hints = dict(layout_index.get("layout_hints") or {})
@@ -64,6 +65,12 @@ def select_strategy(
     selected_regions = [regions[rid] for rid in selected_region_ids if rid in regions]
 
     selected_mode = mode or str(config.get("default_mode", "fake"))
+    selected_output_level = output_level or config.get("output_level")
+    if selected_output_level is None:
+        selected_output_level = "light" if selected_mode == "doubao" else "standard"
+    selected_output_level = str(selected_output_level)
+    if selected_output_level not in {"light", "standard"}:
+        selected_output_level = "standard"
     configured_limit = int(max_model_calls or config.get("max_model_calls", 3))
     highest_name, highest_score = _highest_detector(detector_scores)
     ambiguous = _is_ambiguous(detector_scores)
@@ -185,6 +192,7 @@ def select_strategy(
         selected_strategy=strategy,
         selected_parser_type=parser,
         selected_mode=selected_mode,
+        selected_output_level=selected_output_level,
         selected_input_images=input_images,
         selected_region_ids=selected_region_ids,
         selected_crop_paths=crop_paths,

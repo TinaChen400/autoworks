@@ -13,6 +13,7 @@ CONFIG_PATH = Path("config/parse_orchestrator.json")
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "default_mode": "fake",
+    "output_level": None,
     "max_model_calls": 3,
     "prefer_annotated_crops": True,
     "include_annotated_overview_with_unsafe_crops": True,

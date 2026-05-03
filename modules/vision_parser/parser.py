@@ -40,6 +40,7 @@ SUPPORTED_PARSER_TYPES = {
     "general",
     "scene_scan",
 }
+SUPPORTED_OUTPUT_LEVELS = {"light", "standard"}
 
 
 def _load_parse_plan(path: str | Path | None) -> dict[str, Any]:
@@ -73,14 +74,31 @@ def _resolve_input_image(
     return None
 
 
+def _resolve_output_level(
+    output_level: str | None,
+    mode: str,
+    config: dict[str, Any],
+    parse_plan: dict[str, Any],
+) -> str:
+    selected = output_level or parse_plan.get("selected_output_level") or config.get("output_level")
+    if selected is None:
+        selected = "light" if mode == "doubao" else "standard"
+    selected = str(selected)
+    if selected not in SUPPORTED_OUTPUT_LEVELS:
+        raise ValueError(f"Unsupported output_level: {selected}")
+    return selected
+
+
 def _metadata(
     *,
     parser_type: str,
+    output_level: str,
     input_image: str | None,
     parse_plan: dict[str, Any],
 ) -> dict[str, Any]:
     metadata = {
         "parser_type_used": parser_type,
+        "output_level_used": output_level,
         "input_image_used": input_image or "",
         "parse_plan_used": bool(parse_plan),
         "source": "vision_parser",
@@ -94,6 +112,7 @@ def _metadata(
 def _write_diagnostics(
     *,
     parser_type: str,
+    output_level: str,
     mode: str,
     input_image_used: str | None,
     model_input_path: Path,
@@ -106,6 +125,7 @@ def _write_diagnostics(
         DIAGNOSTICS_PATH,
         {
             "parser_type": parser_type,
+            "output_level": output_level,
             "mode": mode,
             "input_image_used": input_image_used or "",
             "input_image_file_size_bytes": model_input_path.stat().st_size
@@ -124,6 +144,7 @@ def _write_diagnostics(
 def parse_latest_runtime_context(
     mode: str | None = None,
     parser_type: str | None = None,
+    output_level: str | None = None,
     input_image: str | Path | None = None,
     from_parse_plan: str | Path | None = None,
 ) -> dict[str, Any]:
@@ -147,13 +168,18 @@ def parse_latest_runtime_context(
     selected_mode = mode or str(config.get("mode", "fake"))
     if selected_mode not in {"fake", "doubao"}:
         raise VisionModelError(f"Unsupported vision parser mode: {selected_mode}")
+    selected_output_level = _resolve_output_level(output_level, selected_mode, config, parse_plan)
 
     model_input_path = prepare_model_input_image(
         screenshot_path=source_image,
         model_input_region=model_input_region,
         output_path=MODEL_INPUT_PATH,
     )
-    final_prompt = build_final_prompt(runtime_context, parser_type=selected_parser_type)
+    final_prompt = build_final_prompt(
+        runtime_context,
+        parser_type=selected_parser_type,
+        output_level=selected_output_level,
+    )
     write_text(PROMPT_PATH, final_prompt)
     started_at = time.perf_counter()
     raw_response = call_vision_model(
@@ -177,7 +203,12 @@ def parse_latest_runtime_context(
                 "normalization_applied": [],
             }
         else:
-            parsed, validation_report = validate_parsed_page_with_report(raw_response, runtime_context)
+            validation_output_level = "standard" if selected_mode == "fake" else selected_output_level
+            parsed, validation_report = validate_parsed_page_with_report(
+                raw_response,
+                runtime_context,
+                output_level=validation_output_level,
+            )
     except ValidationError as exc:
         validation_report = exc.report or {
             "validation_passed": False,
@@ -189,6 +220,7 @@ def parse_latest_runtime_context(
         write_json(VALIDATION_REPORT_PATH, validation_report)
         _write_diagnostics(
             parser_type=selected_parser_type,
+            output_level=selected_output_level,
             mode=selected_mode,
             input_image_used=selected_input_image,
             model_input_path=model_input_path,
@@ -201,6 +233,7 @@ def parse_latest_runtime_context(
 
     parsed["metadata"] = _metadata(
         parser_type=selected_parser_type,
+        output_level=selected_output_level,
         input_image=selected_input_image,
         parse_plan=parse_plan,
     )
@@ -208,6 +241,7 @@ def parse_latest_runtime_context(
     write_json(VALIDATION_REPORT_PATH, validation_report)
     _write_diagnostics(
         parser_type=selected_parser_type,
+        output_level=selected_output_level,
         mode=selected_mode,
         input_image_used=selected_input_image,
         model_input_path=model_input_path,
@@ -223,6 +257,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Parse the latest screenshot with vision_parser.")
     parser.add_argument("--mode", choices=["fake", "doubao"], default=None)
     parser.add_argument("--parser-type", choices=sorted(SUPPORTED_PARSER_TYPES), default=None)
+    parser.add_argument("--output-level", choices=sorted(SUPPORTED_OUTPUT_LEVELS), default=None)
     parser.add_argument("--input-image", default=None)
     parser.add_argument("--from-parse-plan", default=None)
     args = parser.parse_args()
@@ -230,6 +265,7 @@ def main() -> None:
         parsed = parse_latest_runtime_context(
             mode=args.mode,
             parser_type=args.parser_type,
+            output_level=args.output_level,
             input_image=args.input_image,
             from_parse_plan=args.from_parse_plan,
         )

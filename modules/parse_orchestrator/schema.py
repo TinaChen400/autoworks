@@ -58,6 +58,7 @@ class ParsePlan:
     selected_strategy: str
     selected_parser_type: str
     selected_mode: str
+    selected_output_level: str
     selected_input_images: list[str]
     selected_region_ids: list[str]
     selected_crop_paths: list[str]

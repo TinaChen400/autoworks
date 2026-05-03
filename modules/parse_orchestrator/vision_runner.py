@@ -32,6 +32,7 @@ def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
         warnings.append(MULTI_REGION_MVP_WARNING)
     mode = str(plan.get("selected_mode", "fake"))
     parser_type = str(plan.get("selected_parser_type", "general"))
+    output_level = str(plan.get("selected_output_level") or ("light" if mode == "doubao" else "standard"))
     input_image = selected_input_images[0] if selected_input_images else None
     try:
         from modules.vision_parser.parser import parse_latest_runtime_context
@@ -44,6 +45,7 @@ def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
         parsed = parse_latest_runtime_context(
             mode=mode,
             parser_type=parser_type,
+            output_level=output_level,
             input_image=input_image,
         )
     except Exception as exc:  # noqa: BLE001 - preserve orchestrator outputs on parser failure.
@@ -52,7 +54,7 @@ def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
             parsed_page=load_if_exists(PARSED_PAGE_PATH),
             validation_report=validation,
             model_calls_count=1,
-            validation_passed=bool(validation.get("valid", False)),
+            validation_passed=bool(validation.get("validation_passed", validation.get("valid", False))),
             warnings=warnings,
             error=str(exc),
         )
@@ -61,7 +63,7 @@ def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
         parsed_page=parsed or load_if_exists(PARSED_PAGE_PATH),
         validation_report=validation,
         model_calls_count=1,
-        validation_passed=bool(validation.get("valid", False)),
+        validation_passed=bool(validation.get("validation_passed", validation.get("valid", False))),
         warnings=warnings,
     )
 
@@ -77,6 +79,8 @@ def _run_vision_parser_subprocess(
         mode,
         "--parser-type",
         str(plan.get("selected_parser_type", "general")),
+        "--output-level",
+        str(plan.get("selected_output_level") or ("light" if mode == "doubao" else "standard")),
     ]
     selected_input_images = [str(item) for item in plan.get("selected_input_images", [])]
     if selected_input_images:
@@ -98,7 +102,7 @@ def _run_vision_parser_subprocess(
         parsed_page=load_if_exists(PARSED_PAGE_PATH),
         validation_report=validation,
         model_calls_count=1,
-        validation_passed=bool(validation.get("valid", False)) and completed.returncode == 0,
+        validation_passed=bool(validation.get("validation_passed", validation.get("valid", False))) and completed.returncode == 0,
         warnings=warnings,
         error=error,
     )

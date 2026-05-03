@@ -98,6 +98,27 @@ def test_prompt_builder_includes_form_parser_instructions(tmp_path: Path) -> Non
     assert "Focus on form sections" in prompt
 
 
+def test_light_form_prompt_is_shorter_than_standard_form_prompt(tmp_path: Path) -> None:
+    context = runtime_context(tmp_path / "capture.png")
+    standard = build_final_prompt(context, parser_type="form", output_level="standard")
+    light = build_final_prompt(context, parser_type="form", output_level="light")
+
+    assert len(light) < len(standard)
+    assert len(light) < 1500
+
+
+def test_light_form_prompt_omits_heavy_interaction_instructions(tmp_path: Path) -> None:
+    prompt = build_final_prompt(
+        runtime_context(tmp_path / "capture.png"),
+        parser_type="form",
+        output_level="light",
+    )
+
+    assert "drag_drop" not in prompt
+    assert "matrix" not in prompt
+    assert "audio" not in prompt
+
+
 def test_secrets_loader_masks_api_key_in_logs() -> None:
     assert mask_api_key("sk-test123456") == "sk-****3456"
 
@@ -134,6 +155,27 @@ def test_missing_input_image_returns_clear_error() -> None:
 def test_existing_old_fake_command_still_works() -> None:
     completed = subprocess.run(
         [sys.executable, "-m", "modules.vision_parser.parser", "--mode", "fake"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "Saved ParsedPage JSON" in completed.stdout
+
+
+def test_cli_accepts_output_level_light() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "modules.vision_parser.parser",
+            "--mode",
+            "fake",
+            "--parser-type",
+            "form",
+            "--output-level",
+            "light",
+        ],
         check=False,
         capture_output=True,
         text=True,
@@ -214,6 +256,28 @@ def test_visual_elements_only_response_passes() -> None:
     assert report["validation_passed"] is True
 
 
+def test_light_json_with_visual_elements_passes_validation() -> None:
+    payload = {
+        "page_summary": {"page_type": "form", "language": "en", "summary": "Account form"},
+        "visual_elements": [
+            {
+                "element_role": "form_field",
+                "text": "Account number",
+                "bbox_norm": {},
+            }
+        ],
+        "input_fields": [],
+        "navigation_buttons": [],
+        "uncertainties": [],
+    }
+    parsed, report = validate_parsed_page_with_report(json.dumps(payload), output_level="light")
+
+    assert parsed["page"]["page_type"] == "form"
+    assert parsed["visual_elements"][0]["element_role"] == "form_field"
+    assert parsed["visual_elements"][0]["bbox_norm"] is None
+    assert report["validation_passed"] is True
+
+
 def test_unknown_page_type_does_not_fail() -> None:
     payload = sample_parsed_page("test_task")
     payload["page"]["page_type"] = "learning_app"
@@ -261,12 +325,13 @@ def test_normalization_warnings_are_recorded() -> None:
 
 
 def test_diagnostics_file_writer_works() -> None:
-    parsed = parse_latest_runtime_context(mode="fake", parser_type="form")
+    parsed = parse_latest_runtime_context(mode="fake", parser_type="form", output_level="light")
     diagnostics = json.loads(DIAGNOSTICS_PATH.read_text(encoding="utf-8"))
     report = json.loads(VALIDATION_REPORT_PATH.read_text(encoding="utf-8"))
 
     assert parsed["metadata"]["parser_type_used"] == "form"
     assert diagnostics["parser_type"] == "form"
+    assert diagnostics["output_level"] == "light"
     assert diagnostics["mode"] == "fake"
     assert diagnostics["validation_passed"] is True
     assert diagnostics["raw_response_char_count"] > 0

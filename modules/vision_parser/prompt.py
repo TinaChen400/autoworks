@@ -13,6 +13,8 @@ SUPPORTED_PARSER_TYPES = {
     "scene_scan",
 }
 
+SUPPORTED_OUTPUT_LEVELS = {"light", "standard"}
+
 STRICT_INSTRUCTIONS = [
     "Return useful recognition first.",
     "Do not answer the task.",
@@ -74,6 +76,50 @@ Preferred ParsedPage JSON shape:
 }
 """.strip()
 
+LIGHT_FORM_PROMPT = """
+Return JSON only. Do not answer the task or click.
+Use normalized bbox coordinates for visible items when possible.
+
+Parser type: form
+Return compact JSON with only:
+- page_summary: page_type, language, summary
+- visual_elements: important visible text/cards/sections/buttons
+- input_fields: labels/values/empty fields if visible
+- navigation_buttons: visible next/submit/continue/back buttons
+- uncertainties: unclear or cropped content
+
+Shape:
+{
+  "page_summary": {"page_type": "form|unknown", "language": "en|zh|unknown", "summary": ""},
+  "visual_elements": [{"element_role": "", "text": "", "bbox_norm": {"x": 0, "y": 0, "width": 0, "height": 0}}],
+  "input_fields": [],
+  "navigation_buttons": [],
+  "uncertainties": []
+}
+""".strip()
+
+LIGHT_SURVEY_PROMPT = """
+Return JSON only. Do not answer the task or click.
+Use normalized bbox coordinates for visible items when possible.
+
+Parser type: survey
+Return compact JSON with only:
+- page_summary: page_type, language, summary
+- questions: question stem, instructions, answer options, visible controls
+- navigation_buttons: visible next/submit/continue/back buttons
+- visual_elements: important visible UI/text
+- uncertainties: unclear or cropped content
+
+Shape may include:
+{
+  "page_summary": {"page_type": "questionnaire|unknown", "language": "en|zh|unknown", "summary": ""},
+  "questions": [{"question_stem": {"text": "", "bbox_norm": {}}, "instructions": [], "answer_options": [], "controls": []}],
+  "navigation_buttons": [],
+  "visual_elements": [],
+  "uncertainties": []
+}
+""".strip()
+
 SCENE_SCAN_SCHEMA_PROMPT = """
 Required scene_scan JSON shape:
 {
@@ -128,8 +174,25 @@ def get_supported_question_types(runtime_context: dict) -> list[str]:
     return supported or sorted(QUESTION_TYPES)
 
 
-def build_final_prompt(runtime_context: dict, parser_type: str = "general") -> str:
+def build_final_prompt(
+    runtime_context: dict,
+    parser_type: str = "general",
+    output_level: str = "standard",
+) -> str:
     selected_parser_type = parser_type if parser_type in SUPPORTED_PARSER_TYPES else "general"
+    selected_output_level = output_level if output_level in SUPPORTED_OUTPUT_LEVELS else "standard"
+    if selected_output_level == "light" and selected_parser_type in {"form", "survey"}:
+        task_id = runtime_context.get("task_id", "")
+        task_type = runtime_context.get("task_type") or runtime_context.get("page_type") or ""
+        light_prompt = LIGHT_FORM_PROMPT if selected_parser_type == "form" else LIGHT_SURVEY_PROMPT
+        return f"""
+Task id: {task_id}
+Task hint: {task_type}
+Output level: light
+
+{light_prompt}
+""".strip()
+
     base_prompt = str(runtime_context.get("vision_prompt", "")).strip()
     supported = ", ".join(get_supported_question_types(runtime_context))
     elements = ", ".join(sorted(ELEMENT_TYPES))

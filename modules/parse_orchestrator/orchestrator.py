@@ -35,6 +35,7 @@ def run_orchestrated_parse(
     *,
     mode: str | None = None,
     parser_type: str = "auto",
+    output_level: str | None = None,
     max_model_calls: int | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
@@ -47,6 +48,7 @@ def run_orchestrated_parse(
         config,
         mode=mode,
         parser_type=parser_type,
+        output_level=output_level,
         max_model_calls=max_model_calls,
     )
     plan_data = plan.to_dict()
@@ -117,6 +119,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Coordinate perception_indexer and vision_parser.")
     parser.add_argument("--mode", choices=["fake", "doubao"], default=None)
     parser.add_argument("--parser-type", default="auto")
+    parser.add_argument("--output-level", choices=["light", "standard"], default=None)
     parser.add_argument("--max-model-calls", type=int, default=None)
     return parser
 
@@ -127,6 +130,7 @@ def main() -> None:
         report = run_orchestrated_parse(
             mode=args.mode,
             parser_type=args.parser_type,
+            output_level=args.output_level,
             max_model_calls=args.max_model_calls,
         )
     except FileNotFoundError as exc:

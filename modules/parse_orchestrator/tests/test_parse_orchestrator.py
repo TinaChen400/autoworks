@@ -186,8 +186,46 @@ def test_vision_runner_passes_parser_type_and_input_image(monkeypatch: pytest.Mo
 
     assert captured["mode"] == "fake"
     assert captured["parser_type"] == "form"
+    assert captured["output_level"] == "standard"
     assert captured["input_image"] == "runtime_state/crops/R9_card_license_annotated.png"
     assert result.model_calls_count == 1
+
+
+def test_vision_runner_passes_light_output_level_for_doubao(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_parse_latest_runtime_context(**kwargs: object) -> dict:
+        captured.update(kwargs)
+        return {
+            "page": {"page_type": "unknown", "confidence": 0.1},
+            "questions": [],
+            "navigation_buttons": [],
+            "uncertainties": [],
+        }
+
+    monkeypatch.setattr(
+        "modules.vision_parser.parser.parse_latest_runtime_context",
+        fake_parse_latest_runtime_context,
+    )
+    run_vision_parser(
+        {
+            "selected_mode": "doubao",
+            "selected_parser_type": "form",
+            "selected_input_images": ["runtime_state/crops/R9_card_license_annotated.png"],
+        }
+    )
+
+    assert captured["mode"] == "doubao"
+    assert captured["output_level"] == "light"
+
+
+def test_select_strategy_accepts_fake_output_level_config(tmp_path: Path) -> None:
+    config = _config()
+    config["output_level"] = "light"
+    plan, _ = select_strategy(_runtime_context(tmp_path), _layout(tmp_path), config, mode="fake")
+
+    assert plan.selected_mode == "fake"
+    assert plan.selected_output_level == "light"
 
 
 def test_vision_runner_warns_multi_region_mvp(monkeypatch: pytest.MonkeyPatch) -> None:

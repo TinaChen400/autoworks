@@ -273,17 +273,75 @@ def _has_textual_content(value: Any) -> bool:
     return False
 
 
+def _normalize_light_extracted(extracted: dict[str, Any], report: dict[str, Any]) -> None:
+    page_summary = extracted.get("page_summary")
+    if isinstance(page_summary, dict) and "page" not in extracted:
+        extracted["page"] = {
+            "page_type": page_summary.get("page_type", "unknown"),
+            "language": page_summary.get("language", "unknown"),
+            "page_status": page_summary.get("page_status", "unknown"),
+            "confidence": page_summary.get("confidence", 0.0),
+        }
+        _add(report, "info", "normalized_page_summary", "page_summary", "Mapped page_summary to page.")
+    elif page_summary is not None and not isinstance(page_summary, dict):
+        _report_error(report, "invalid_page_summary", "page_summary", "page_summary must be an object.")
+    _drop_incomplete_light_bboxes(extracted, "$", report)
+
+
+def _drop_incomplete_light_bboxes(value: Any, path: str, report: dict[str, Any]) -> None:
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _drop_incomplete_light_bboxes(item, f"{path}[{index}]", report)
+        return
+    if not isinstance(value, dict):
+        return
+    bbox = value.get("bbox_norm")
+    if isinstance(bbox, dict) and not all(axis in bbox for axis in ("x", "y", "width", "height")):
+        value["bbox_norm"] = None
+        _add(
+            report,
+            "info",
+            "ignored_incomplete_light_bbox",
+            f"{path}.bbox_norm",
+            "Ignored incomplete light-mode bbox_norm.",
+        )
+    for key, item in value.items():
+        if key != "bbox_norm":
+            _drop_incomplete_light_bboxes(item, f"{path}.{key}", report)
+
+
+def _validate_light_input_fields(parsed: dict[str, Any], report: dict[str, Any]) -> None:
+    if "input_fields" not in parsed:
+        return
+    if not isinstance(parsed["input_fields"], list):
+        _report_error(report, "invalid_input_fields", "input_fields", "input_fields must be a list.")
+        parsed["input_fields"] = []
+        return
+    for field_index, field_value in enumerate(parsed["input_fields"]):
+        field_path = f"input_fields[{field_index}]"
+        if not isinstance(field_value, dict):
+            _report_error(report, "invalid_input_field", field_path, f"{field_path} must be an object.")
+            continue
+        if "field_type" in field_value:
+            _normalize_enum(field_value, "field_type", FIELD_TYPES, f"{field_path}.field_type", report, raw_key="raw_field_type")
+        _normalize_bbox(field_value, "bbox_norm", f"{field_path}.bbox_norm", report)
+        _infer_click_from_bbox(field_value, field_path, report)
+        _normalize_point(field_value, "click_point_norm", f"{field_path}.click_point_norm", report)
+
+
 def validate_parsed_page(
     raw_text: str,
     runtime_context: dict[str, Any] | None = None,
+    output_level: str = "standard",
 ) -> dict[str, Any]:
-    parsed, _report = validate_parsed_page_with_report(raw_text, runtime_context)
+    parsed, _report = validate_parsed_page_with_report(raw_text, runtime_context, output_level=output_level)
     return parsed
 
 
 def validate_parsed_page_with_report(
     raw_text: str,
     runtime_context: dict[str, Any] | None = None,
+    output_level: str = "standard",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     report = empty_validation_report()
     try:
@@ -297,6 +355,9 @@ def validate_parsed_page_with_report(
             raise report_exc from exc
     if "metadata" in extracted and not isinstance(extracted["metadata"], dict):
         _report_error(report, "invalid_metadata", "metadata", "metadata must be an object.")
+    selected_output_level = output_level if output_level in {"light", "standard"} else "standard"
+    if selected_output_level == "light":
+        _normalize_light_extracted(extracted, report)
 
     parsed = normalize_parsed_page(extracted, task_id=str((runtime_context or {}).get("task_id", "")))
     supported = set(get_supported_question_types(runtime_context or {}))
@@ -492,9 +553,14 @@ def validate_parsed_page_with_report(
                 "related_question_id does not match a question.",
             )
 
-    recognizable = bool(
-        parsed["visual_elements"] or parsed["navigation_buttons"] or parsed["uncertainties"]
-    )
+    if selected_output_level == "light":
+        _validate_light_input_fields(parsed, report)
+
+    recognizable = bool(parsed["visual_elements"] or parsed["navigation_buttons"])
+    if selected_output_level == "standard":
+        recognizable = recognizable or bool(parsed["uncertainties"])
+    else:
+        recognizable = recognizable or bool(parsed.get("input_fields"))
     recognizable = recognizable or any(
         isinstance(question, dict)
         and (
