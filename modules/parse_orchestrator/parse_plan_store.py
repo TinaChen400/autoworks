@@ -9,6 +9,7 @@ PARSE_PLAN_PATH = Path("runtime_state/latest_parse_plan.json")
 PARSE_METRICS_PATH = Path("runtime_state/latest_parse_metrics.json")
 ORCHESTRATED_PARSE_PATH = Path("runtime_state/latest_orchestrated_parse.json")
 ORCHESTRATOR_REPORT_PATH = Path("runtime_state/latest_parse_orchestrator_report.json")
+LOCAL_PARSE_PATH = Path("runtime_state/latest_local_parse.json")
 
 
 def save_parse_plan(plan: dict[str, Any]) -> None:
@@ -17,6 +18,10 @@ def save_parse_plan(plan: dict[str, Any]) -> None:
 
 def save_parse_metrics(metrics: dict[str, Any]) -> None:
     write_json(PARSE_METRICS_PATH, metrics)
+
+
+def save_local_parse(local_parse: dict[str, Any]) -> None:
+    write_json(LOCAL_PARSE_PATH, local_parse)
 
 
 def save_orchestrated_parse(orchestrated_parse: dict[str, Any]) -> None:

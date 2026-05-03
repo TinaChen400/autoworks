@@ -21,6 +21,28 @@ def _highest_detector(detector_scores: dict[str, Any]) -> tuple[str, float]:
     return name, scores[name]
 
 
+def select_local_fast_parse_type(
+    layout_index: dict[str, Any], config: dict[str, Any]
+) -> tuple[str, float, str]:
+    hints = dict(layout_index.get("layout_hints") or {})
+    detector_scores = {
+        str(key): float(value or 0.0)
+        for key, value in dict(hints.get("detector_scores") or {}).items()
+    }
+    highest_name, highest_score = _highest_detector(detector_scores)
+    allowed = {str(item) for item in config.get("local_fast_parse_allowed_types", ["form", "survey"])}
+    threshold = float(config.get("local_fast_parse_min_confidence", 0.7))
+    if highest_name not in allowed:
+        return "", highest_score, f"Highest detector type {highest_name} is not local-parse enabled."
+    if highest_score < threshold:
+        return (
+            "",
+            highest_score,
+            f"Highest detector score {highest_score:.2f} is below local threshold {threshold:.2f}.",
+        )
+    return highest_name, highest_score, ""
+
+
 def _is_ambiguous(detector_scores: dict[str, Any]) -> bool:
     values = sorted((float(v or 0.0) for v in detector_scores.values()), reverse=True)
     if not values or values[0] <= 0:

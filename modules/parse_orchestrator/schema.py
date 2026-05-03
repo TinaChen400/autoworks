@@ -93,6 +93,9 @@ class ParseMetrics:
     input_images_used: list[str]
     warnings: list[str]
     created_at: str
+    local_fast_parse_used: bool = False
+    local_parse_confidence: float = 0.0
+    remote_fallback_used: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

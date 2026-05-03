@@ -15,6 +15,9 @@ def build_metrics(
     fallback_used: bool,
     fallback_reason: str,
     warnings: list[str],
+    local_fast_parse_used: bool = False,
+    local_parse_confidence: float = 0.0,
+    remote_fallback_used: bool | None = None,
 ) -> ParseMetrics:
     page = dict(parsed_page.get("page") or {})
     return ParseMetrics(
@@ -32,5 +35,8 @@ def build_metrics(
         input_images_used=[str(item) for item in plan.get("selected_input_images", [])],
         warnings=warnings,
         created_at=now_iso(),
+        local_fast_parse_used=local_fast_parse_used,
+        local_parse_confidence=local_parse_confidence,
+        remote_fallback_used=fallback_used if remote_fallback_used is None else remote_fallback_used,
     )
 

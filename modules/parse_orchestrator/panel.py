@@ -103,9 +103,19 @@ class ParseOrchestratorPanel(tk.Tk):
                 f"Possible page types: {hints.get('possible_page_types', [])}",
                 "Recommended regions: "
                 f"{hints.get('recommended_regions_for_detail_parse', [])}",
+                f"Local fast parse enabled: {config.get('enable_local_fast_parse', False)}",
                 f"Selected strategy preview: {plan.selected_strategy}",
                 f"Warnings: {plan.crop_safety_summary.get('unsafe_region_ids', [])}",
             ]
+            metrics = load_if_exists(PARSE_METRICS_PATH)
+            if metrics:
+                lines.extend(
+                    [
+                        f"Local parse confidence: {metrics.get('local_parse_confidence', 0.0)}",
+                        f"Remote fallback used: {metrics.get('remote_fallback_used', False)}",
+                        f"Model calls count: {metrics.get('model_calls_count', 0)}",
+                    ]
+                )
         except Exception as exc:  # noqa: BLE001 - panel should display status instead of crashing.
             lines = [str(exc)]
         self.status.insert(tk.END, "\n".join(lines))
