@@ -1,0 +1,10 @@
+{
+  "default_mode": "fake",
+  "max_model_calls": 3,
+  "prefer_annotated_crops": true,
+  "include_annotated_overview_with_unsafe_crops": true,
+  "fallback_to_full_screenshot": true,
+  "safe_crop_required_for_crop_only_parse": true,
+  "minimum_detector_score_for_direct_parse": 0.5,
+  "allowed_parser_types": ["form", "survey", "image_task", "drag_drop", "matrix", "modal", "general", "scene_scan"]
+}

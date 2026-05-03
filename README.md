@@ -121,3 +121,43 @@ Known limitations:
 - Crops do not replace the full screenshot.
 - No answers are decided.
 - No mouse or keyboard actions are executed.
+
+## Parse Orchestrator
+
+The fifth module is the strategy layer between `perception_indexer` and `vision_parser`. It reads the latest runtime context, layout index, annotated overview, and region crops, then decides which parser type and image inputs should be used for a single parse. It does not decide answers, click, call OCR, or call Doubao directly.
+
+Run fake mode:
+
+```powershell
+python -m modules.parse_orchestrator.orchestrator --mode fake
+```
+
+Run Doubao mode through `vision_parser`:
+
+```powershell
+python -m modules.parse_orchestrator.orchestrator --mode doubao
+```
+
+Open the local Tkinter panel:
+
+```powershell
+python -m modules.parse_orchestrator.panel
+```
+
+Runtime outputs:
+
+- `runtime_state/latest_parse_plan.json`: selected strategy, parser type, selected regions, crop paths, fallback policy, detector scores, and crop safety summary.
+- `runtime_state/latest_parse_metrics.json`: model-call count, elapsed time, validation status, fallback use, final page type/confidence, warnings, and image inputs used.
+- `runtime_state/latest_orchestrated_parse.json`: downstream contract for later `answer_engine`, including `parsed_page`, region references when available, parse plan, metrics, review flag, and warnings.
+- `runtime_state/latest_parse_orchestrator_report.json`: concise CLI/panel report.
+
+For the current form/card fixture, `perception_indexer` recommends business card regions `R9` through `R13`. `parse_orchestrator` selects those regions for direct form parsing when the form detector is strongest, prefers annotated card crops when they are available, marks unsafe crops in the plan, and preserves a full screenshot fallback.
+
+Known limitations:
+
+- MVP does not decide answers.
+- MVP does not click.
+- MVP depends on `perception_indexer` layout-index quality.
+- If `vision_parser` cannot yet consume custom crop inputs, the plan still records selected crop paths but the parser may use the existing runtime context.
+- Automatic retry is minimal.
+- Complex survey, image, drag-drop, and matrix strategies are stub-level until detectors are implemented.
