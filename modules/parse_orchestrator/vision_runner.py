@@ -10,6 +10,9 @@ from modules.parse_orchestrator.parse_plan_store import load_if_exists
 
 PARSED_PAGE_PATH = Path("runtime_state/latest_parsed_page.json")
 VALIDATION_REPORT_PATH = Path("runtime_state/latest_vision_validation_report.json")
+MULTI_REGION_MVP_WARNING = (
+    "Multi-region parse is planned but MVP currently parses the first selected input image only."
+)
 
 
 @dataclass
@@ -23,12 +26,13 @@ class VisionRunResult:
 
 
 def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
-    warnings = [
-        "vision_parser currently consumes latest_runtime_context; "
-        "selected crop inputs are recorded "
-        "in the parse plan but may not be passed to the parser yet."
-    ]
+    warnings = []
+    selected_input_images = [str(item) for item in plan.get("selected_input_images", [])]
+    if len(selected_input_images) > 1:
+        warnings.append(MULTI_REGION_MVP_WARNING)
     mode = str(plan.get("selected_mode", "fake"))
+    parser_type = str(plan.get("selected_parser_type", "general"))
+    input_image = selected_input_images[0] if selected_input_images else None
     try:
         from modules.vision_parser.parser import parse_latest_runtime_context
     except ImportError:
@@ -37,7 +41,11 @@ def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
         return _run_vision_parser_subprocess(plan, mode, warnings)
 
     try:
-        parsed = parse_latest_runtime_context(mode=mode)
+        parsed = parse_latest_runtime_context(
+            mode=mode,
+            parser_type=parser_type,
+            input_image=input_image,
+        )
     except Exception as exc:  # noqa: BLE001 - preserve orchestrator outputs on parser failure.
         validation = load_if_exists(VALIDATION_REPORT_PATH)
         return VisionRunResult(
@@ -61,7 +69,18 @@ def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
 def _run_vision_parser_subprocess(
     plan: dict[str, Any], mode: str, warnings: list[str]
 ) -> VisionRunResult:
-    command = [sys.executable, "-m", "modules.vision_parser.parser", "--mode", mode]
+    command = [
+        sys.executable,
+        "-m",
+        "modules.vision_parser.parser",
+        "--mode",
+        mode,
+        "--parser-type",
+        str(plan.get("selected_parser_type", "general")),
+    ]
+    selected_input_images = [str(item) for item in plan.get("selected_input_images", [])]
+    if selected_input_images:
+        command.extend(["--input-image", selected_input_images[0]])
     try:
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
     except FileNotFoundError:

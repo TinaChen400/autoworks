@@ -137,8 +137,21 @@ def call_vision_model(
     image_path: str | Path,
     task_id: str,
     config: dict[str, Any] | None = None,
+    parser_type: str = "general",
 ) -> str:
     if mode == "fake":
+        if parser_type == "scene_scan":
+            return json.dumps(
+                {
+                    "detected_page_type": "unknown",
+                    "layout_type": "unknown",
+                    "detected_interaction_types": [],
+                    "recommended_parser": "general",
+                    "confidence": 0.1,
+                    "reason": "Fake mode returns a schema-valid placeholder scene scan only.",
+                },
+                ensure_ascii=False,
+            )
         return json.dumps(sample_parsed_page(task_id), ensure_ascii=False)
     if mode == "doubao":
         return call_doubao(prompt, image_path, config)

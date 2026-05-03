@@ -2,6 +2,17 @@ from __future__ import annotations
 
 from modules.vision_parser.schema import ELEMENT_TYPES, QUESTION_TYPES
 
+SUPPORTED_PARSER_TYPES = {
+    "form",
+    "survey",
+    "image_task",
+    "drag_drop",
+    "matrix",
+    "modal",
+    "general",
+    "scene_scan",
+}
+
 STRICT_INSTRUCTIONS = [
     "Do not answer the task.",
     "Do not click anything.",
@@ -46,6 +57,53 @@ Required ParsedPage JSON shape:
 }
 """.strip()
 
+SCENE_SCAN_SCHEMA_PROMPT = """
+Required scene_scan JSON shape:
+{
+  "detected_page_type": "string",
+  "layout_type": "string",
+  "detected_interaction_types": [],
+  "recommended_parser": "form|survey|image_task|drag_drop|matrix|modal|general|scene_scan",
+  "confidence": 0.0,
+  "reason": "string"
+}
+""".strip()
+
+PARSER_SPECIFIC_INSTRUCTIONS = {
+    "form": [
+        "Focus on form sections, fields, labels, values, action links, and buttons.",
+        "Prefer element_id and region_id if visible in the annotated image.",
+        "Do not answer questions.",
+        "Do not click.",
+    ],
+    "survey": [
+        "Focus on question stem, instructions, answer options, radio or checkbox controls, and navigation buttons.",
+        "Prefer element_id and region_id if visible.",
+        "Do not answer.",
+    ],
+    "image_task": [
+        "Focus on image content, image options, question text, and answer options.",
+        "Identify ambiguity, but do not answer.",
+    ],
+    "drag_drop": [
+        "Focus on draggable items, source areas, target or drop zones, and matching relationships.",
+        "Do not decide final drag actions.",
+    ],
+    "matrix": [
+        "Focus on row labels, column labels, matrix cells, and radio or checkbox matrix controls.",
+    ],
+    "modal": [
+        "Focus on modal title, body text, close buttons, confirm buttons, and cancel buttons.",
+    ],
+    "general": [
+        "Use general page parsing behavior and identify all visible task-relevant page elements.",
+    ],
+    "scene_scan": [
+        "Return short classification JSON only.",
+        "Classify the visible page type, layout type, interaction types, recommended parser, confidence, and reason.",
+    ],
+}
+
 
 def get_supported_question_types(runtime_context: dict) -> list[str]:
     configured = runtime_context.get("supported_question_types") or []
@@ -53,18 +111,31 @@ def get_supported_question_types(runtime_context: dict) -> list[str]:
     return supported or sorted(QUESTION_TYPES)
 
 
-def build_final_prompt(runtime_context: dict) -> str:
+def build_final_prompt(runtime_context: dict, parser_type: str = "general") -> str:
+    selected_parser_type = parser_type if parser_type in SUPPORTED_PARSER_TYPES else "general"
     base_prompt = str(runtime_context.get("vision_prompt", "")).strip()
     supported = ", ".join(get_supported_question_types(runtime_context))
     elements = ", ".join(sorted(ELEMENT_TYPES))
     strict = "\n".join(f"- {line}" for line in STRICT_INSTRUCTIONS)
+    parser_specific = "\n".join(
+        f"- {line}" for line in PARSER_SPECIFIC_INSTRUCTIONS[selected_parser_type]
+    )
     task_id = runtime_context.get("task_id", "")
+    schema_prompt = (
+        SCENE_SCAN_SCHEMA_PROMPT
+        if selected_parser_type == "scene_scan"
+        else PARSED_PAGE_SCHEMA_PROMPT
+    )
 
     return f"""
 {base_prompt}
 
 Strict vision_parser instructions:
 {strict}
+
+Parser type: {selected_parser_type}
+Parser-specific instructions:
+{parser_specific}
 
 Task id: {task_id}
 Supported question types for this runtime context: {supported}
@@ -74,5 +145,5 @@ Keep navigation buttons out of answer_options. Every answer option must belong t
 question. If visible media is too small, cropped, ambiguous, or may require audio understanding,
 add an uncertainty and set the relevant review flag.
 
-{PARSED_PAGE_SCHEMA_PROMPT}
+{schema_prompt}
 """.strip()

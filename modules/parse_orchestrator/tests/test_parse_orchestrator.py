@@ -9,6 +9,10 @@ from PIL import Image
 from modules.parse_orchestrator.input_loader import load_layout_index
 from modules.parse_orchestrator.orchestrator import run_orchestrated_parse
 from modules.parse_orchestrator.strategy_selector import select_strategy
+from modules.parse_orchestrator.vision_runner import (
+    MULTI_REGION_MVP_WARNING,
+    run_vision_parser,
+)
 
 
 def _runtime_context(tmp_path: Path) -> dict:
@@ -154,3 +158,57 @@ def test_no_browser_header_footer_region_selected_when_business_cards_exist(tmp_
     plan, _ = select_strategy(_runtime_context(tmp_path), layout, _config())
     assert "R2" not in plan.selected_region_ids
     assert plan.selected_region_ids == ["R9", "R10"]
+
+
+def test_vision_runner_passes_parser_type_and_input_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_parse_latest_runtime_context(**kwargs: object) -> dict:
+        captured.update(kwargs)
+        return {
+            "page": {"page_type": "unknown", "confidence": 0.1},
+            "questions": [],
+            "navigation_buttons": [],
+            "uncertainties": [],
+        }
+
+    monkeypatch.setattr(
+        "modules.vision_parser.parser.parse_latest_runtime_context",
+        fake_parse_latest_runtime_context,
+    )
+    result = run_vision_parser(
+        {
+            "selected_mode": "fake",
+            "selected_parser_type": "form",
+            "selected_input_images": ["runtime_state/crops/R9_card_license_annotated.png"],
+        }
+    )
+
+    assert captured["mode"] == "fake"
+    assert captured["parser_type"] == "form"
+    assert captured["input_image"] == "runtime_state/crops/R9_card_license_annotated.png"
+    assert result.model_calls_count == 1
+
+
+def test_vision_runner_warns_multi_region_mvp(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_parse_latest_runtime_context(**kwargs: object) -> dict:
+        return {
+            "page": {"page_type": "unknown", "confidence": 0.1},
+            "questions": [],
+            "navigation_buttons": [],
+            "uncertainties": [],
+        }
+
+    monkeypatch.setattr(
+        "modules.vision_parser.parser.parse_latest_runtime_context",
+        fake_parse_latest_runtime_context,
+    )
+    result = run_vision_parser(
+        {
+            "selected_mode": "fake",
+            "selected_parser_type": "form",
+            "selected_input_images": ["a.png", "b.png"],
+        }
+    )
+
+    assert MULTI_REGION_MVP_WARNING in result.warnings

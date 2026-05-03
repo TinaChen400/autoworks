@@ -21,6 +21,15 @@ from modules.vision_parser.schema import (
     normalize_parsed_page,
 )
 
+SCENE_SCAN_REQUIRED_FIELDS = (
+    "detected_page_type",
+    "layout_type",
+    "detected_interaction_types",
+    "recommended_parser",
+    "confidence",
+    "reason",
+)
+
 
 class ValidationError(ValueError):
     pass
@@ -89,6 +98,8 @@ def validate_parsed_page(
     runtime_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     extracted = extract_json(raw_text)
+    if "metadata" in extracted:
+        _require_object(extracted["metadata"], "metadata")
     required_fields = (
         "parse_id",
         "task_id",
@@ -203,6 +214,23 @@ def validate_parsed_page(
             )
 
     return parsed
+
+
+def validate_scene_scan(raw_text: str) -> dict[str, Any]:
+    extracted = extract_json(raw_text)
+    if "metadata" in extracted:
+        _require_object(extracted["metadata"], "metadata")
+    for field in SCENE_SCAN_REQUIRED_FIELDS:
+        if field not in extracted:
+            raise ValidationError(f"Missing top-level field: {field}")
+    _require_list(extracted["detected_interaction_types"], "detected_interaction_types")
+    _check_enum(
+        extracted.get("recommended_parser"),
+        {"form", "survey", "image_task", "drag_drop", "matrix", "modal", "general", "scene_scan"},
+        "recommended_parser",
+    )
+    _check_norm_number(extracted.get("confidence"), "confidence")
+    return extracted
 
 
 def validate_file(path: str | Path) -> dict[str, Any]:
