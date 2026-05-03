@@ -14,18 +14,22 @@ SUPPORTED_PARSER_TYPES = {
 }
 
 STRICT_INSTRUCTIONS = [
+    "Return useful recognition first.",
     "Do not answer the task.",
     "Do not click anything.",
     "Do not call OCR.",
     "Do not reuse previous coordinates.",
     "Return JSON only.",
     "Use normalized coordinates relative to the model input screenshot region.",
-    "Distinguish all required page elements.",
+    "Do not force every page into questions.",
+    "Use visual_elements for any visible important UI elements.",
+    "For unknown pages, return page summary plus visual_elements.",
+    "If enum fields are unclear, use unknown; the local parser also tolerates missing optional fields.",
     "Include uncertainties when something is unclear.",
 ]
 
 PARSED_PAGE_SCHEMA_PROMPT = """
-Required ParsedPage JSON shape:
+Preferred ParsedPage JSON shape:
 {
   "parse_id": "string",
   "task_id": "string",
@@ -50,6 +54,19 @@ Required ParsedPage JSON shape:
       "matrix": null,
       "confidence": 0.0,
       "requires_human_review": false
+    }
+  ],
+  "visual_elements": [
+    {
+      "element_id": "",
+      "element_role": "page_title|section_title|question_stem|instruction_text|answer_option|input_field|form_field|button|navigation_button|image_content|image_option|audio_content|draggable_item|drop_zone|matrix_cell|card|text|unknown",
+      "text": "",
+      "label": "",
+      "bbox_norm": {"x": 0, "y": 0, "width": 0, "height": 0},
+      "click_point_norm": {"x": 0, "y": 0},
+      "raw_type": "",
+      "confidence": 0.0,
+      "metadata": {}
     }
   ],
   "navigation_buttons": [],

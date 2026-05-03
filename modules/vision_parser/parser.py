@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,10 @@ from modules.vision_parser.doubao_client import (
 )
 from modules.vision_parser.image_payload import prepare_model_input_image
 from modules.vision_parser.parse_store import (
+    DIAGNOSTICS_PATH,
     MODEL_INPUT_PATH,
     PARSED_PAGE_PATH,
+    PROMPT_PATH,
     RAW_RESPONSE_PATH,
     VALIDATION_REPORT_PATH,
     load_runtime_context,
@@ -23,7 +26,7 @@ from modules.vision_parser.parse_store import (
 from modules.vision_parser.prompt import build_final_prompt
 from modules.vision_parser.response_validator import (
     ValidationError,
-    validate_parsed_page,
+    validate_parsed_page_with_report,
     validate_scene_scan,
 )
 
@@ -88,6 +91,36 @@ def _metadata(
     return metadata
 
 
+def _write_diagnostics(
+    *,
+    parser_type: str,
+    mode: str,
+    input_image_used: str | None,
+    model_input_path: Path,
+    prompt: str,
+    raw_response: str,
+    elapsed_time_ms: int,
+    validation_report: dict[str, Any],
+) -> None:
+    write_json(
+        DIAGNOSTICS_PATH,
+        {
+            "parser_type": parser_type,
+            "mode": mode,
+            "input_image_used": input_image_used or "",
+            "input_image_file_size_bytes": model_input_path.stat().st_size
+            if model_input_path.exists()
+            else 0,
+            "prompt_char_count": len(prompt),
+            "raw_response_char_count": len(raw_response),
+            "elapsed_time_ms": elapsed_time_ms,
+            "validation_passed": bool(validation_report.get("validation_passed")),
+            "errors_count": len(validation_report.get("errors", [])),
+            "warnings_count": len(validation_report.get("warnings", [])),
+        },
+    )
+
+
 def parse_latest_runtime_context(
     mode: str | None = None,
     parser_type: str | None = None,
@@ -121,6 +154,8 @@ def parse_latest_runtime_context(
         output_path=MODEL_INPUT_PATH,
     )
     final_prompt = build_final_prompt(runtime_context, parser_type=selected_parser_type)
+    write_text(PROMPT_PATH, final_prompt)
+    started_at = time.perf_counter()
     raw_response = call_vision_model(
         mode=selected_mode,
         prompt=final_prompt,
@@ -134,10 +169,34 @@ def parse_latest_runtime_context(
     try:
         if selected_parser_type == "scene_scan":
             parsed = validate_scene_scan(raw_response)
+            validation_report = {
+                "validation_passed": True,
+                "errors": [],
+                "warnings": [],
+                "info": [],
+                "normalization_applied": [],
+            }
         else:
-            parsed = validate_parsed_page(raw_response, runtime_context)
+            parsed, validation_report = validate_parsed_page_with_report(raw_response, runtime_context)
     except ValidationError as exc:
-        write_json(VALIDATION_REPORT_PATH, {"valid": False, "errors": [str(exc)]})
+        validation_report = exc.report or {
+            "validation_passed": False,
+            "errors": [{"code": "validation_error", "path": "$", "message": str(exc)}],
+            "warnings": [],
+            "info": [],
+            "normalization_applied": [],
+        }
+        write_json(VALIDATION_REPORT_PATH, validation_report)
+        _write_diagnostics(
+            parser_type=selected_parser_type,
+            mode=selected_mode,
+            input_image_used=selected_input_image,
+            model_input_path=model_input_path,
+            prompt=final_prompt,
+            raw_response=raw_response,
+            elapsed_time_ms=int((time.perf_counter() - started_at) * 1000),
+            validation_report=validation_report,
+        )
         raise
 
     parsed["metadata"] = _metadata(
@@ -146,7 +205,17 @@ def parse_latest_runtime_context(
         parse_plan=parse_plan,
     )
     write_json(PARSED_PAGE_PATH, parsed)
-    write_json(VALIDATION_REPORT_PATH, {"valid": True, "errors": []})
+    write_json(VALIDATION_REPORT_PATH, validation_report)
+    _write_diagnostics(
+        parser_type=selected_parser_type,
+        mode=selected_mode,
+        input_image_used=selected_input_image,
+        model_input_path=model_input_path,
+        prompt=final_prompt,
+        raw_response=raw_response,
+        elapsed_time_ms=int((time.perf_counter() - started_at) * 1000),
+        validation_report=validation_report,
+    )
     return parsed
 
 

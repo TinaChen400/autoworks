@@ -10,9 +10,14 @@ from PIL import Image
 
 from modules.vision_parser.doubao_client import call_vision_model, mask_api_key
 from modules.vision_parser.image_payload import prepare_model_input_image
+from modules.vision_parser.parse_store import DIAGNOSTICS_PATH, VALIDATION_REPORT_PATH
 from modules.vision_parser.parser import parse_latest_runtime_context
 from modules.vision_parser.prompt import build_final_prompt
-from modules.vision_parser.response_validator import ValidationError, validate_parsed_page
+from modules.vision_parser.response_validator import (
+    ValidationError,
+    validate_parsed_page,
+    validate_parsed_page_with_report,
+)
 from modules.vision_parser.schema import sample_parsed_page
 
 
@@ -69,11 +74,16 @@ def test_validator_rejects_invalid_bbox_norm() -> None:
         validate_parsed_page(json.dumps(payload), {"supported_question_types": ["unknown"]})
 
 
-def test_validator_rejects_unknown_question_type_not_in_allowed_list() -> None:
+def test_validator_normalizes_unknown_question_type_not_in_allowed_list() -> None:
     payload = sample_parsed_page("test_task")
     payload["questions"][0]["question_type"] = "image_reasoning"
-    with pytest.raises(ValidationError):
-        validate_parsed_page(json.dumps(payload), {"supported_question_types": ["single_choice"]})
+    parsed, report = validate_parsed_page_with_report(
+        json.dumps(payload),
+        {"supported_question_types": ["single_choice"]},
+    )
+    assert parsed["questions"][0]["question_type"] == "unknown"
+    assert report["validation_passed"] is True
+    assert report["warnings"]
 
 
 def test_prompt_builder_includes_json_only_instruction(tmp_path: Path) -> None:
@@ -130,3 +140,134 @@ def test_existing_old_fake_command_still_works() -> None:
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "Saved ParsedPage JSON" in completed.stdout
+
+
+def test_answer_option_option_type_none_normalizes_and_passes() -> None:
+    payload = sample_parsed_page("test_task")
+    payload["questions"][0]["question_type"] = "single_choice"
+    payload["questions"][0]["answer_options"] = [
+        {
+            "option_id": "a",
+            "option_type": None,
+            "selection_control": "radio",
+            "text": "Option A",
+            "bbox_norm": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.1},
+        }
+    ]
+    parsed, report = validate_parsed_page_with_report(json.dumps(payload), {"supported_question_types": ["single_choice"]})
+
+    assert parsed["questions"][0]["answer_options"][0]["option_type"] == "text_option"
+    assert parsed["questions"][0]["answer_options"][0]["click_point_norm"] == {"x": 0.25, "y": 0.25}
+    assert report["validation_passed"] is True
+
+
+def test_answer_option_missing_selection_control_normalizes_and_passes() -> None:
+    payload = sample_parsed_page("test_task")
+    payload["questions"][0]["question_type"] = "multiple_choice"
+    payload["questions"][0]["answer_options"] = [
+        {
+            "option_id": "a",
+            "option_type": "text_option",
+            "text": "Option A",
+            "bbox_norm": {"x": 0.1, "y": 0.2, "width": 0.3, "height": 0.1},
+        }
+    ]
+    parsed, report = validate_parsed_page_with_report(json.dumps(payload), {"supported_question_types": ["multiple_choice"]})
+
+    assert parsed["questions"][0]["answer_options"][0]["selection_control"] == "checkbox"
+    assert report["validation_passed"] is True
+
+
+def test_navigation_action_text_normalizes_to_next_page() -> None:
+    payload = sample_parsed_page("test_task")
+    payload["navigation_buttons"] = [
+        {
+            "label": "Next",
+            "action": "navigate to next page",
+            "bbox_norm": {"x": 0.8, "y": 0.8, "width": 0.1, "height": 0.1},
+        }
+    ]
+    parsed, report = validate_parsed_page_with_report(json.dumps(payload), {"supported_question_types": ["unknown"]})
+
+    assert parsed["navigation_buttons"][0]["action"] == "next_page"
+    assert parsed["navigation_buttons"][0]["button_id"] == "nav_next"
+    assert parsed["navigation_buttons"][0]["click_point_norm"]["x"] == pytest.approx(0.85)
+    assert parsed["navigation_buttons"][0]["click_point_norm"]["y"] == pytest.approx(0.85)
+    assert report["validation_passed"] is True
+
+
+def test_visual_elements_only_response_passes() -> None:
+    payload = {
+        "page": {"page_type": "unknown", "language": "en", "page_status": "unknown", "confidence": 0.7},
+        "visual_elements": [
+            {
+                "element_role": "page_title",
+                "text": "Welcome",
+                "bbox_norm": {"x": 0, "y": 0, "width": 0.5, "height": 0.1},
+            }
+        ],
+    }
+    parsed, report = validate_parsed_page_with_report(json.dumps(payload), {"task_id": "test_task"})
+
+    assert parsed["visual_elements"][0]["element_role"] == "page_title"
+    assert parsed["questions"] == []
+    assert report["validation_passed"] is True
+
+
+def test_unknown_page_type_does_not_fail() -> None:
+    payload = sample_parsed_page("test_task")
+    payload["page"]["page_type"] = "learning_app"
+    parsed, report = validate_parsed_page_with_report(json.dumps(payload), {"supported_question_types": ["unknown"]})
+
+    assert parsed["page"]["page_type"] == "unknown"
+    assert parsed["page"]["raw_page_type"] == "learning_app"
+    assert report["validation_passed"] is True
+
+
+def test_invalid_json_still_fails() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        validate_parsed_page_with_report("{bad json")
+
+    assert exc_info.value.report["validation_passed"] is False
+    assert exc_info.value.report["errors"][0]["code"] == "invalid_json"
+
+
+def test_no_recognizable_content_fails() -> None:
+    payload = {"page": {"page_type": "unknown", "language": "unknown", "page_status": "unknown", "confidence": 0.1}}
+    with pytest.raises(ValidationError) as exc_info:
+        validate_parsed_page_with_report(json.dumps(payload))
+
+    assert exc_info.value.report["errors"][0]["code"] == "no_recognizable_content"
+
+
+def test_normalization_warnings_are_recorded() -> None:
+    payload = sample_parsed_page("test_task")
+    payload["questions"][0]["answer_options"] = [
+        {
+            "option_id": "a",
+            "option_type": None,
+            "selection_control": None,
+            "text": "A",
+            "bbox_norm": {"x": -0.01, "y": 0.2, "width": 0.3, "height": 0.1},
+        }
+    ]
+    _parsed, report = validate_parsed_page_with_report(json.dumps(payload), {"supported_question_types": ["unknown"]})
+    codes = {warning["code"] for warning in report["warnings"]}
+
+    assert "missing_optional_enum" in codes
+    assert "inferred_click_point" in codes
+    assert "clamped_bbox_value" in codes
+    assert report["normalization_applied"]
+
+
+def test_diagnostics_file_writer_works() -> None:
+    parsed = parse_latest_runtime_context(mode="fake", parser_type="form")
+    diagnostics = json.loads(DIAGNOSTICS_PATH.read_text(encoding="utf-8"))
+    report = json.loads(VALIDATION_REPORT_PATH.read_text(encoding="utf-8"))
+
+    assert parsed["metadata"]["parser_type_used"] == "form"
+    assert diagnostics["parser_type"] == "form"
+    assert diagnostics["mode"] == "fake"
+    assert diagnostics["validation_passed"] is True
+    assert diagnostics["raw_response_char_count"] > 0
+    assert report["validation_passed"] is True

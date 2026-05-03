@@ -9,16 +9,27 @@ LANGUAGES = {"en", "zh", "unknown"}
 PAGE_STATUSES = {"active_question_page", "form_page", "unknown"}
 
 ELEMENT_TYPES = {
+    "page_title",
+    "section_title",
     "question_stem",
     "instruction_text",
     "answer_option",
     "input_field",
+    "button",
     "image_content",
     "image_option",
     "audio_content",
+    "draggable_item",
+    "drop_zone",
+    "matrix_cell",
+    "card",
+    "text",
+    "unknown",
     "navigation_button",
     "form_field",
 }
+
+ELEMENT_ROLES = ELEMENT_TYPES
 
 QUESTION_TYPES = {
     "single_choice",
@@ -105,5 +116,6 @@ def normalize_parsed_page(data: dict[str, Any], task_id: str = "") -> dict[str, 
     )
     normalized.setdefault("questions", [])
     normalized.setdefault("navigation_buttons", [])
+    normalized.setdefault("visual_elements", [])
     normalized.setdefault("uncertainties", [])
     return normalized

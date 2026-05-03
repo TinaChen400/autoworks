@@ -9,6 +9,8 @@ MODEL_INPUT_PATH = Path("runtime_state/latest_model_input.png")
 RAW_RESPONSE_PATH = Path("runtime_state/latest_raw_vision_response.txt")
 PARSED_PAGE_PATH = Path("runtime_state/latest_parsed_page.json")
 VALIDATION_REPORT_PATH = Path("runtime_state/latest_vision_validation_report.json")
+PROMPT_PATH = Path("runtime_state/latest_vision_prompt.txt")
+DIAGNOSTICS_PATH = Path("runtime_state/latest_vision_diagnostics.json")
 
 
 def read_json(path: str | Path) -> dict[str, Any]:
