@@ -29,7 +29,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 def load_config() -> dict[str, Any]:
     if not CONFIG_PATH.exists():
         return dict(DEFAULT_CONFIG)
-    with CONFIG_PATH.open("r", encoding="utf-8") as file:
+    with CONFIG_PATH.open("r", encoding="utf-8-sig") as file:
         loaded = json.load(file)
     config = dict(DEFAULT_CONFIG)
     config.update(loaded)
@@ -45,7 +45,7 @@ def write_json(path: str | Path, data: Any) -> None:
 
 
 def read_json(path: str | Path) -> dict[str, Any]:
-    with Path(path).open("r", encoding="utf-8") as file:
+    with Path(path).open("r", encoding="utf-8-sig") as file:
         return json.load(file)
 
 

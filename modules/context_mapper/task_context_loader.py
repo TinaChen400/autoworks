@@ -25,7 +25,7 @@ FORBIDDEN_COORDINATE_KEYS = {
 def load_json_context(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Task context file not found: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     _reject_fixed_answer_coordinates(data, path)
     return data
 

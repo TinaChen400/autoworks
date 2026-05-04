@@ -30,7 +30,7 @@ def load_model_config(path: str | Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
             "response_format": "json",
             "secrets_file": str(DEFAULT_SECRETS_PATH),
         }
-    with config_path.open("r", encoding="utf-8") as file:
+    with config_path.open("r", encoding="utf-8-sig") as file:
         return json.load(file)
 
 
@@ -48,7 +48,7 @@ def load_secrets(path: str | Path = DEFAULT_SECRETS_PATH) -> dict[str, str]:
         raise VisionModelError(
             f"Missing Doubao secrets file: {secrets_path}. Create config/secrets.json first."
         )
-    with secrets_path.open("r", encoding="utf-8") as file:
+    with secrets_path.open("r", encoding="utf-8-sig") as file:
         data = json.load(file)
 
     endpoint_id = str(data.get("doubao_endpoint_id", "")).strip()

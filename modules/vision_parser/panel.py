@@ -148,12 +148,12 @@ class VisionParserPanel(tk.Tk):
         if RAW_RESPONSE_PATH.exists():
             self._replace_text(self.raw_text, RAW_RESPONSE_PATH.read_text(encoding="utf-8"))
         if PARSED_PAGE_PATH.exists():
-            self._replace_text(self.parsed_text, PARSED_PAGE_PATH.read_text(encoding="utf-8"))
-            self.parsed_page = json.loads(PARSED_PAGE_PATH.read_text(encoding="utf-8"))
+            self._replace_text(self.parsed_text, PARSED_PAGE_PATH.read_text(encoding="utf-8-sig"))
+            self.parsed_page = json.loads(PARSED_PAGE_PATH.read_text(encoding="utf-8-sig"))
         elif VALIDATION_REPORT_PATH.exists():
             self._replace_text(
                 self.parsed_text,
-                VALIDATION_REPORT_PATH.read_text(encoding="utf-8"),
+                VALIDATION_REPORT_PATH.read_text(encoding="utf-8-sig"),
             )
 
     def _prepare_and_load_preview_image(self) -> None:
@@ -177,7 +177,7 @@ class VisionParserPanel(tk.Tk):
                 f"Image: {self.preview_image.width}x{self.preview_image.height}"
             )
         if PARSED_PAGE_PATH.exists():
-            self.parsed_page = json.loads(PARSED_PAGE_PATH.read_text(encoding="utf-8"))
+            self.parsed_page = json.loads(PARSED_PAGE_PATH.read_text(encoding="utf-8-sig"))
         self._draw_preview()
 
     def _draw_preview(self) -> None:

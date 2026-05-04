@@ -63,7 +63,7 @@ def ensure_anchor_profile(path: Path = DEFAULT_CONFIG_PATH) -> AnchorProfile:
         path.write_text(json.dumps(DEFAULT_ANCHOR, indent=2) + "\n", encoding="utf-8")
         return DEFAULT_ANCHOR.copy()
 
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if "base_width" not in data or "base_height" not in data:
         width = int(data.get("width", DEFAULT_ANCHOR["base_width"]))
         height = int(data.get("height", DEFAULT_ANCHOR["base_height"]))

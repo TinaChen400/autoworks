@@ -15,7 +15,7 @@ def load_runtime_context(path: str | Path = RUNTIME_CONTEXT_PATH) -> dict[str, A
     source = Path(path)
     if not source.exists():
         raise FileNotFoundError("Please run context_mapper first.")
-    with source.open("r", encoding="utf-8") as file:
+    with source.open("r", encoding="utf-8-sig") as file:
         return json.load(file)
 
 

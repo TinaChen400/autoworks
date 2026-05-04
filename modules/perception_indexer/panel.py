@@ -125,7 +125,7 @@ class PerceptionIndexerPanel(tk.Tk):
 
     def _load_existing_index(self) -> None:
         if LAYOUT_INDEX_PATH.exists():
-            self.layout_index = json.loads(LAYOUT_INDEX_PATH.read_text(encoding="utf-8"))
+            self.layout_index = json.loads(LAYOUT_INDEX_PATH.read_text(encoding="utf-8-sig"))
             self._show_index()
 
     def _show_index(self) -> None:

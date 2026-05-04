@@ -20,7 +20,7 @@ def load_target_profile(path: Path = DEFAULT_TARGET_PATH) -> TargetProfile | Non
     if not path.exists():
         return None
 
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     title = str(data.get("title", "")).strip()
     class_name = str(data.get("class_name", "")).strip()
     if not title or not class_name:

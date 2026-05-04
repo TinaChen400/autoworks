@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from modules.answer_engine import answer_engine, input_loader, panel, user_profile_loader
@@ -150,3 +152,21 @@ def test_panel_can_load_without_clicking(tmp_path, monkeypatch):
     output = panel.render_panel("auto")
     assert "Answer Engine Panel" in output
     assert "Recommended answer" in output
+
+
+def test_decision_store_writes_json_tool_parseable_utf8_without_bom(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    decision_store.save_decision({"decision_id": "decision_1", "question_decisions": []})
+    decision_store.save_report({"validation_passed": True, "issues": [], "warnings": []})
+    decision_path = tmp_path / "runtime_state" / "latest_answer_decision.json"
+    report_path = tmp_path / "runtime_state" / "latest_answer_engine_report.json"
+
+    assert not decision_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert not report_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    for path in (decision_path, report_path):
+        subprocess.run(
+            [sys.executable, "-m", "json.tool", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )

@@ -598,7 +598,7 @@ def validate_scene_scan(raw_text: str) -> dict[str, Any]:
 
 
 def validate_file(path: str | Path) -> dict[str, Any]:
-    raw = Path(path).read_text(encoding="utf-8")
+    raw = Path(path).read_text(encoding="utf-8-sig")
     return validate_parsed_page(raw)
 
 
@@ -607,7 +607,7 @@ def main() -> None:
     parser.add_argument("raw_response_path")
     args = parser.parse_args()
     try:
-        raw = Path(args.raw_response_path).read_text(encoding="utf-8")
+        raw = Path(args.raw_response_path).read_text(encoding="utf-8-sig")
         parsed, report = validate_parsed_page_with_report(raw)
     except ValidationError as exc:
         report = exc.report or {

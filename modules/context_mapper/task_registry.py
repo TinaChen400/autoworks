@@ -13,7 +13,7 @@ REGISTRY_PATH = TASK_CONTEXT_ROOT / "registry.json"
 def load_registry(registry_path: Path = REGISTRY_PATH) -> dict[str, Any]:
     if not registry_path.exists():
         raise FileNotFoundError(f"Task registry not found: {registry_path}")
-    data = json.loads(registry_path.read_text(encoding="utf-8"))
+    data = json.loads(registry_path.read_text(encoding="utf-8-sig"))
     if "tasks" not in data or not isinstance(data["tasks"], dict):
         raise ValueError("Task registry must contain a tasks object")
     return data

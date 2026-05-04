@@ -95,7 +95,7 @@ def map_model_norm(
 def load_runtime_context(path: Path = DEFAULT_RUNTIME_CONTEXT_PATH) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Runtime context not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _validate_norm(norm_x: float, norm_y: float) -> None:

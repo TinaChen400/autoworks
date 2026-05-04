@@ -12,7 +12,7 @@ SESSION_PATH = ROOT / "runtime_state" / "latest_survey_session.json"
 
 def load_session(task_id: str = "") -> dict:
     if SESSION_PATH.exists():
-        with SESSION_PATH.open("r", encoding="utf-8") as handle:
+        with SESSION_PATH.open("r", encoding="utf-8-sig") as handle:
             return json.load(handle)
     return new_session(task_id)
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from modules.page_state_manager import input_loader, session_manager, session_store
 from modules.page_state_manager.consistency_checker import detect_conflicting_answer
+from modules.page_state_manager.schema import new_session
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -58,3 +61,17 @@ def test_consistency_checker_detects_conflicting_answers():
     conflicts = detect_conflicting_answer(memory, "has seller central", "no")
     assert conflicts
     assert conflicts[0]["previous_value"] == "yes"
+
+
+def test_session_store_writes_json_tool_parseable_utf8_without_bom(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    session_store.save_session(new_session("task1"))
+    session_path = tmp_path / "runtime_state" / "latest_survey_session.json"
+
+    assert not session_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    subprocess.run(
+        [sys.executable, "-m", "json.tool", str(session_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
