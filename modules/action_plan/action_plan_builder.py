@@ -61,6 +61,39 @@ def _load_source_parse_page(decision: dict) -> dict:
     return {}
 
 
+def _reviewed_decision_matches(session: dict, source_decision: dict, reviewed_decision: dict, report: dict) -> bool:
+    source_decision_id = source_decision.get("decision_id", "")
+    reviewed_source_id = reviewed_decision.get("source_decision_id") or reviewed_decision.get("decision_id")
+    if reviewed_source_id != source_decision_id:
+        return False
+    if reviewed_decision.get("session_id") != session.get("session_id"):
+        return False
+    if reviewed_decision.get("task_id") != session.get("task_id"):
+        return False
+    return bool(reviewed_decision.get("validation_passed") or report.get("validation_passed"))
+
+
+def _select_decision_source(session: dict, decision: dict, answer_report: dict) -> tuple[dict, dict]:
+    reviewed_path = action_plan_store.REVIEWED_DECISION_PATH
+    report_path = action_plan_store.HUMAN_REVIEW_REPORT_PATH
+    if not reviewed_path.exists() or not report_path.exists():
+        return decision, answer_report
+
+    reviewed_decision = action_plan_store.load_json(reviewed_path)
+    review_report = action_plan_store.load_json(report_path)
+    if not _reviewed_decision_matches(session, decision, reviewed_decision, review_report):
+        return decision, answer_report
+
+    return reviewed_decision, {
+        "validation_passed": True,
+        "issues": review_report.get("issues", []),
+        "warnings": review_report.get("warnings", []),
+        "requires_human_review": bool(
+            reviewed_decision.get("requires_human_review") or review_report.get("requires_human_review")
+        ),
+    }
+
+
 def _question_has_options(question: dict) -> bool:
     return bool(question.get("answer_options") or question.get("options"))
 
@@ -174,6 +207,7 @@ def _actions_for_decision(qd: dict, question: dict) -> list[dict]:
 def build_action_plan(source: str = "auto") -> tuple[dict, dict]:
     _ = source
     session, decision, answer_report = action_plan_store.load_inputs()
+    decision, answer_report = _select_decision_source(session, decision, answer_report)
     page = _current_page(session, decision)
     source_page = _load_source_parse_page(decision)
 

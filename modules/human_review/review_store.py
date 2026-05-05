@@ -6,13 +6,12 @@ from pathlib import Path
 
 ROOT = Path.cwd()
 RUNTIME_DIR = ROOT / "runtime_state"
-SESSION_PATH = RUNTIME_DIR / "latest_survey_session.json"
 DECISION_PATH = RUNTIME_DIR / "latest_answer_decision.json"
-ANSWER_REPORT_PATH = RUNTIME_DIR / "latest_answer_engine_report.json"
+ORCHESTRATED_PARSE_PATH = RUNTIME_DIR / "latest_orchestrated_parse.json"
+SESSION_PATH = RUNTIME_DIR / "latest_survey_session.json"
+MANUAL_REVIEW_INPUT_PATH = RUNTIME_DIR / "manual_review_input.json"
 REVIEWED_DECISION_PATH = RUNTIME_DIR / "latest_reviewed_answer_decision.json"
 HUMAN_REVIEW_REPORT_PATH = RUNTIME_DIR / "latest_human_review_report.json"
-ACTION_PLAN_PATH = RUNTIME_DIR / "latest_action_plan.json"
-ACTION_PLAN_REPORT_PATH = RUNTIME_DIR / "latest_action_plan_report.json"
 
 
 def load_json(path: Path) -> dict:
@@ -28,13 +27,11 @@ def save_json(path: Path, payload: dict) -> Path:
     return path
 
 
-def load_inputs() -> tuple[dict, dict, dict]:
-    return load_json(SESSION_PATH), load_json(DECISION_PATH), load_json(ANSWER_REPORT_PATH)
+def load_inputs() -> tuple[dict, dict, dict, dict]:
+    return (
+        load_json(MANUAL_REVIEW_INPUT_PATH),
+        load_json(DECISION_PATH),
+        load_json(ORCHESTRATED_PARSE_PATH),
+        load_json(SESSION_PATH),
+    )
 
-
-def save_action_plan(plan: dict) -> Path:
-    return save_json(ACTION_PLAN_PATH, plan)
-
-
-def save_report(report: dict) -> Path:
-    return save_json(ACTION_PLAN_REPORT_PATH, report)
