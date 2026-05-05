@@ -1,59 +1,25 @@
 from __future__ import annotations
 
-from typing import Any
+from modules.composite_skills import (
+    choice_composite_skills,
+    form_composite_skills,
+    navigation_composite_skills,
+)
 
-from .base_skill import BaseDryRunSkill, dry_run_result
-
-
-class _NamedDryRunSkill(BaseDryRunSkill):
-    name = ""
-    simulated_operation = ""
-
-    def execute(self, action: dict[str, Any]) -> dict[str, Any]:
-        return dry_run_result(
-            action,
-            details={
-                "simulated_operation": self.simulated_operation,
-            },
-        )
-
-
-class ClickOptionDryRunSkill(_NamedDryRunSkill):
-    name = "click_option"
-    simulated_operation = "select_option"
-
-
-class TypeTextDryRunSkill(_NamedDryRunSkill):
-    name = "type_text"
-    simulated_operation = "enter_text"
-
-
-class SelectDropdownDryRunSkill(_NamedDryRunSkill):
-    name = "select_dropdown"
-    simulated_operation = "choose_dropdown_option"
-
-
-class WaitDryRunSkill(_NamedDryRunSkill):
-    name = "wait"
-    simulated_operation = "wait"
-
-
-class ClickNextDryRunSkill(_NamedDryRunSkill):
-    name = "click_next"
-    simulated_operation = "advance_page"
-
-
-class SubmitDryRunSkill(_NamedDryRunSkill):
-    name = "submit"
-    simulated_operation = "submit_form"
+from .atomic_keyboard_skills import keyboard_atomic_skills
+from .atomic_mouse_skills import mouse_atomic_skills
+from .atomic_wait_skills import wait_atomic_skills
+from .atomic_window_skills import window_atomic_skills
+from .base_skill import BaseDryRunSkill
 
 
 def default_dry_run_skills() -> list[BaseDryRunSkill]:
     return [
-        ClickOptionDryRunSkill(),
-        TypeTextDryRunSkill(),
-        SelectDropdownDryRunSkill(),
-        WaitDryRunSkill(),
-        ClickNextDryRunSkill(),
-        SubmitDryRunSkill(),
+        *mouse_atomic_skills(),
+        *keyboard_atomic_skills(),
+        *wait_atomic_skills(),
+        *window_atomic_skills(),
+        *choice_composite_skills(),
+        *form_composite_skills(),
+        *navigation_composite_skills(),
     ]

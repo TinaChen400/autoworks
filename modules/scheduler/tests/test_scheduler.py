@@ -102,6 +102,17 @@ def test_valid_executable_click_option_runs_dry_run_click_skill() -> None:
     assert scheduler_run["executed_actions"][0]["action_id"] == "a1"
     assert scheduler_run["executed_actions"][0]["skill"] == "click_option"
     assert scheduler_run["executed_actions"][0]["dry_run"] is True
+    assert (
+        scheduler_run["executed_actions"][0]["composite_skill"]
+        == "select_single_choice_option"
+    )
+    atomic_steps = scheduler_run["executed_actions"][0]["atomic_steps"]
+    assert [step["skill"] for step in atomic_steps] == [
+        "move_mouse",
+        "left_click",
+        "wait",
+        "verify_option_selected",
+    ]
 
 
 def test_unknown_skill_produces_failure_without_crashing() -> None:
