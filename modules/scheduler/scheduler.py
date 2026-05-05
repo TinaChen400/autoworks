@@ -4,6 +4,7 @@ import argparse
 from copy import deepcopy
 from typing import Any
 
+from modules.action_executor.preview_adapter import run_preview_from_payloads
 from modules.skills.skill_registry import SkillRegistry, default_skill_registry
 
 from . import scheduler_store
@@ -139,6 +140,12 @@ def run(source: str = "auto") -> tuple[dict[str, Any], dict[str, Any]]:
     scheduler_run, report = run_scheduler(execution_gate, resolved_action_plan)
     scheduler_store.save_scheduler_run(scheduler_run)
     scheduler_store.save_report(report)
+    run_preview_from_payloads(
+        execution_gate,
+        scheduler_run,
+        resolved_action_plan,
+        scheduler_store.RUNTIME_DIR,
+    )
     return scheduler_run, report
 
 
@@ -160,4 +167,3 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

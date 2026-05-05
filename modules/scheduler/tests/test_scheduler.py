@@ -171,9 +171,13 @@ def test_output_json_has_no_utf8_bom(tmp_path, monkeypatch) -> None:
     run("auto")
     scheduler_run_path = runtime / "latest_scheduler_run.json"
     report_path = runtime / "latest_scheduler_report.json"
+    action_executor_preview_path = runtime / "latest_action_executor_preview.json"
+    action_executor_report_path = runtime / "latest_action_executor_report.json"
 
     assert not scheduler_run_path.read_bytes().startswith(b"\xef\xbb\xbf")
     assert not report_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert not action_executor_preview_path.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert not action_executor_report_path.read_bytes().startswith(b"\xef\xbb\xbf")
     subprocess.run(
         [sys.executable, "-m", "json.tool", str(scheduler_run_path)],
         check=True,
@@ -182,6 +186,18 @@ def test_output_json_has_no_utf8_bom(tmp_path, monkeypatch) -> None:
     )
     subprocess.run(
         [sys.executable, "-m", "json.tool", str(report_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [sys.executable, "-m", "json.tool", str(action_executor_preview_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [sys.executable, "-m", "json.tool", str(action_executor_report_path)],
         check=True,
         capture_output=True,
         text=True,
