@@ -1,0 +1,21 @@
+{
+  "enabled": false,
+  "target_environment": "local_html_only",
+  "require_execution_safety_allowed": true,
+  "require_kvm_calibrated": true,
+  "require_single_real_action_group": true,
+  "allowed_logical_skills": [
+    "click_option"
+  ],
+  "blocked_logical_skills": [
+    "submit",
+    "click_next",
+    "type_text",
+    "press_key",
+    "double_click"
+  ],
+  "countdown_seconds": 5,
+  "abort_file": "runtime_state/STOP_REAL_CLICK",
+  "write_preflight_preview": true,
+  "max_clicks": 1
+}
