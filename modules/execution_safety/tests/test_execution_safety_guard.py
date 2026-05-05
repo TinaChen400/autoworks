@@ -75,6 +75,61 @@ def _preview(status: str = "completed", skill: str = "left_click", count: int = 
     }
 
 
+def _click_preview(
+    action_ids: list[str] | None = None,
+    include_action_click_point: bool = True,
+    skill: str = "click_option",
+) -> dict:
+    ids = action_ids if action_ids is not None else ["a1"]
+    records = []
+    for index, action_id in enumerate(ids):
+        click_point = {"x": 799 + index, "y": 612 + index}
+        action_record = {
+            "record_type": "action",
+            "action_id": action_id,
+            "skill": skill,
+            "option_id": f"T2{index + 1}",
+            "option_text": "AmazonCentral",
+            "real_execution": False,
+        }
+        if include_action_click_point:
+            action_record["click_point_screen"] = click_point
+        records.extend(
+            [
+                action_record,
+                {
+                    "record_type": "atomic_step",
+                    "action_id": action_id,
+                    "skill": "move_mouse",
+                    "option_id": f"T2{index + 1}",
+                    "option_text": "AmazonCentral",
+                    "click_point_screen": click_point,
+                    "real_execution": False,
+                },
+                {
+                    "record_type": "atomic_step",
+                    "action_id": action_id,
+                    "skill": "left_click",
+                    "option_id": f"T2{index + 1}",
+                    "option_text": "AmazonCentral",
+                    "click_point_screen": click_point,
+                    "real_execution": False,
+                },
+            ]
+        )
+    return {
+        "action_executor_preview_id": "action_executor_preview_1",
+        "task_id": "tts01",
+        "session_id": "session_1",
+        "status": "completed",
+        "preview_mode": True,
+        "real_execution": False,
+        "preview_records": records,
+        "failures": [],
+        "block_reasons": [],
+    }
+
+
 def _calibration(calibrated: bool = True) -> dict:
     return {
         "kvm_calibration_id": "kvm_calibration_1",
@@ -184,27 +239,77 @@ def test_blocked_skills_block_real_execution() -> None:
     blocked = {"submit", "click_next", "type_text", "press_key", "double_click"}
 
     for skill in blocked:
-        guard, _ = _evaluate(scheduler=_scheduler(skill=skill), preview=_preview(skill=skill))
+        guard, _ = _evaluate(
+            scheduler=_scheduler(skill=skill),
+            preview=_click_preview(skill=skill),
+        )
         codes = _codes(guard)
         assert guard["real_execution_allowed"] is False
         assert "mvp_real_skill_blocked" in codes
 
 
-def test_too_many_candidate_actions_blocks_real_execution() -> None:
-    guard, _ = _evaluate(preview=_preview(count=2))
+def test_one_click_option_with_atomic_steps_counts_as_one_real_action_group() -> None:
+    guard, report = _evaluate(preview=_click_preview())
+
+    assert report["validation_passed"] is True
+    assert guard["real_action_group_count"] == 1
+    assert guard["real_action_groups"] == [
+        {
+            "action_id": "a1",
+            "logical_skill": "click_option",
+            "option_id": "T21",
+            "option_text": "AmazonCentral",
+            "click_point_screen": {"x": 799, "y": 612},
+            "atomic_steps": ["move_mouse", "left_click"],
+            "real_execution": False,
+        }
+    ]
+
+
+def test_one_click_group_does_not_exceed_max_one_real_action() -> None:
+    guard, _ = _evaluate(preview=_click_preview())
+
+    assert "too_many_real_candidate_actions" not in _codes(guard)
+    assert guard["real_execution_allowed"] is True
+
+
+def test_two_action_id_groups_exceed_max_one_real_action() -> None:
+    guard, _ = _evaluate(preview=_click_preview(["a1", "a2"]))
 
     assert guard["real_execution_allowed"] is False
     assert "too_many_real_candidate_actions" in _codes(guard)
+    assert guard["real_action_group_count"] == 2
+
+
+def test_missing_click_point_screen_in_group_blocks_safely() -> None:
+    preview = _click_preview()
+    for record in preview["preview_records"]:
+        record.pop("click_point_screen", None)
+
+    guard, _ = _evaluate(preview=preview)
+
+    assert guard["real_execution_allowed"] is False
+    assert "missing_click_point_screen" in _codes(guard)
 
 
 def test_one_allowed_click_candidate_passes_only_when_all_safety_flags_true() -> None:
-    guard, report = _evaluate()
+    guard, report = _evaluate(preview=_click_preview())
 
     assert report["validation_passed"] is True
     assert guard["real_execution_allowed"] is True
     assert guard["status"] == "allowed"
     assert guard["block_reasons"] == []
-    assert guard["real_candidate_actions"][0]["skill"] == "left_click"
+    assert guard["real_candidate_actions"][0]["skill"] == "move_mouse"
+    assert guard["real_action_groups"][0]["logical_skill"] == "click_option"
+
+
+def test_default_config_blocks_due_to_disabled_execution_and_preview_mode() -> None:
+    guard, _ = _evaluate(config=_config(), preview=_click_preview())
+
+    assert guard["real_execution_allowed"] is False
+    assert "real_execution_disabled" in _codes(guard)
+    assert "execution_mode_not_kvm_real" in _codes(guard)
+    assert "too_many_real_candidate_actions" not in _codes(guard)
 
 
 def test_output_json_has_no_utf8_bom(tmp_path) -> None:

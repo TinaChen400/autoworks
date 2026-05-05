@@ -35,6 +35,10 @@ def _preview_records(action_executor_preview: dict[str, Any]) -> list[dict[str, 
     return [record for record in records if isinstance(record, dict)]
 
 
+def _valid_click_point_screen(value: Any) -> bool:
+    return isinstance(value, dict) and "x" in value and "y" in value
+
+
 def _real_candidate_actions(action_executor_preview: dict[str, Any]) -> list[dict[str, Any]]:
     records = _preview_records(action_executor_preview)
     atomic_records = [record for record in records if record.get("record_type") == "atomic_step"]
@@ -54,6 +58,48 @@ def _real_candidate_actions(action_executor_preview: dict[str, Any]) -> list[dic
             }
         )
     return candidates
+
+
+def _real_action_groups(action_executor_preview: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    groups_by_key: dict[str, dict[str, Any]] = {}
+
+    for index, record in enumerate(_preview_records(action_executor_preview)):
+        action_id = str(record.get("action_id") or "")
+        group_key = action_id if action_id else f"missing_action_id_{index + 1}"
+        group = groups_by_key.get(group_key)
+        if group is None:
+            group = {
+                "action_id": action_id,
+                "logical_skill": "",
+                "option_id": "",
+                "option_text": "",
+                "click_point_screen": {},
+                "atomic_steps": [],
+                "real_execution": False,
+            }
+            groups_by_key[group_key] = group
+            groups.append(group)
+
+        skill = str(record.get("skill") or "")
+        if record.get("record_type") == "atomic_step":
+            if skill and skill not in group["atomic_steps"]:
+                group["atomic_steps"].append(skill)
+        elif skill:
+            group["logical_skill"] = skill
+
+        if not group["logical_skill"] and skill:
+            group["logical_skill"] = skill
+        if not group["option_id"] and record.get("option_id") not in ("", None):
+            group["option_id"] = record.get("option_id")
+        if not group["option_text"] and record.get("option_text") not in ("", None):
+            group["option_text"] = record.get("option_text")
+        if not group["click_point_screen"] and _valid_click_point_screen(
+            record.get("click_point_screen")
+        ):
+            group["click_point_screen"] = deepcopy(record.get("click_point_screen"))
+
+    return groups
 
 
 def _action_skills(value: Any) -> list[tuple[str, str]]:
@@ -104,6 +150,7 @@ def evaluate_execution_safety_guard(
     config = _merged_config(config)
     block_reasons: list[dict[str, Any]] = []
     candidates = _real_candidate_actions(action_executor_preview)
+    real_action_groups = _real_action_groups(action_executor_preview)
     checks = _safety_checks(
         config,
         execution_gate,
@@ -197,12 +244,13 @@ def evaluate_execution_safety_guard(
                 "max_real_actions_per_run must be a non-negative integer.",
             )
         )
-    if len(candidates) > max_actions:
+    if len(real_action_groups) > max_actions:
         block_reasons.append(
             block_reason(
                 "too_many_real_candidate_actions",
-                "Real candidate action count exceeds max_real_actions_per_run.",
-                candidate_count=len(candidates),
+                "Real action group count exceeds max_real_actions_per_run.",
+                candidate_count=len(real_action_groups),
+                real_action_group_count=len(real_action_groups),
                 max_real_actions_per_run=max_actions,
             )
         )
@@ -230,9 +278,34 @@ def evaluate_execution_safety_guard(
                 )
             )
 
+    for group in real_action_groups:
+        action_id = str(group.get("action_id") or "")
+        logical_skill = str(group.get("logical_skill") or "")
+        if not _valid_click_point_screen(group.get("click_point_screen")):
+            block_reasons.append(
+                block_reason(
+                    "missing_click_point_screen",
+                    "Real action group is missing click_point_screen.",
+                    action_id=action_id,
+                    skill=logical_skill,
+                )
+            )
+        if logical_skill in blocked_skills:
+            block_reasons.append(
+                block_reason(
+                    "real_skill_blocked",
+                    "Real action group skill is in blocked_real_skills.",
+                    action_id=action_id,
+                    skill=logical_skill,
+                )
+            )
+
     observed_skills = _action_skills(scheduler_run.get("executed_actions")) + [
         (str(candidate.get("skill") or ""), str(candidate.get("action_id") or ""))
         for candidate in candidates
+    ] + [
+        (str(group.get("logical_skill") or ""), str(group.get("action_id") or ""))
+        for group in real_action_groups
     ]
     for skill, action_id in observed_skills:
         if skill in MVP_BLOCKED_REAL_SKILLS:
@@ -256,6 +329,7 @@ def evaluate_execution_safety_guard(
         real_execution_allowed,
         block_reasons,
         candidates,
+        real_action_groups,
         checks,
     )
     report = validate_execution_safety_guard(guard)

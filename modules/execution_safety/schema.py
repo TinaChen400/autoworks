@@ -19,6 +19,7 @@ DEFAULT_EXECUTION_SAFETY_CONFIG: dict[str, Any] = {
     "require_manual_start": True,
     "max_real_actions_per_run": 1,
     "allowed_real_skills": [
+        "click_option",
         "move_mouse",
         "left_click",
     ],
@@ -54,6 +55,7 @@ def new_execution_safety_guard(
     real_execution_allowed: bool,
     block_reasons: list[dict[str, Any]],
     real_candidate_actions: list[dict[str, Any]],
+    real_action_groups: list[dict[str, Any]],
     safety_checks: dict[str, bool],
 ) -> dict[str, Any]:
     _ = kvm_calibration_report
@@ -85,7 +87,8 @@ def new_execution_safety_guard(
         "execution_mode": config.get("execution_mode", "preview"),
         "block_reasons": block_reasons,
         "real_candidate_actions": real_candidate_actions,
+        "real_action_groups": real_action_groups,
+        "real_action_group_count": len(real_action_groups),
         "safety_checks": safety_checks,
         "created_at": utc_now_iso(),
     }
-

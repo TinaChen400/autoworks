@@ -37,6 +37,7 @@ def validate_execution_safety_guard(guard: dict[str, Any]) -> dict[str, Any]:
     real_execution_allowed = guard.get("real_execution_allowed")
     block_reasons = guard.get("block_reasons")
     real_candidate_actions = guard.get("real_candidate_actions")
+    real_action_groups = guard.get("real_action_groups")
     safety_checks = guard.get("safety_checks")
 
     if status not in VALID_GUARD_STATUSES:
@@ -56,6 +57,17 @@ def validate_execution_safety_guard(guard: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(real_candidate_actions, list):
         issues.append({"type": "invalid_real_candidate_actions"})
         real_candidate_actions = []
+    if not isinstance(real_action_groups, list):
+        issues.append({"type": "invalid_real_action_groups"})
+        real_action_groups = []
+    if guard.get("real_action_group_count") != len(real_action_groups):
+        issues.append(
+            {
+                "type": "real_action_group_count_mismatch",
+                "real_action_group_count": guard.get("real_action_group_count"),
+                "actual_real_action_group_count": len(real_action_groups),
+            }
+        )
     if not isinstance(safety_checks, dict):
         issues.append({"type": "invalid_safety_checks"})
         safety_checks = {}
@@ -79,5 +91,6 @@ def validate_execution_safety_guard(guard: dict[str, Any]) -> dict[str, Any]:
         "real_execution_allowed": real_execution_allowed is True and not issues,
         "block_reason_count": len(block_reasons),
         "real_candidate_action_count": len(real_candidate_actions),
+        "real_action_group_count": len(real_action_groups),
         "safety_checks": safety_checks,
     }
