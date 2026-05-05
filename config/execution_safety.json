@@ -1,0 +1,23 @@
+{
+  "execution_mode": "preview",
+  "allow_real_execution": false,
+  "require_execution_gate_allowed": true,
+  "require_scheduler_completed": true,
+  "require_action_executor_preview_completed": true,
+  "require_kvm_calibrated": true,
+  "require_manual_start": true,
+  "max_real_actions_per_run": 1,
+  "allowed_real_skills": [
+    "move_mouse",
+    "left_click"
+  ],
+  "blocked_real_skills": [
+    "submit",
+    "click_next",
+    "press_key",
+    "type_text",
+    "double_click"
+  ],
+  "emergency_stop_enabled": true,
+  "safe_test_mode_only": true
+}
