@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tkinter as tk
@@ -11,8 +12,10 @@ if __package__ in {None, ""}:
 
 from modules.window_capture.capture import (
     ALLOWED_SCALES,
+    AnchorFrame,
     capture_anchor_frame,
     ensure_anchor_profile,
+    initialize_capture_backend,
     resolve_anchor_frame,
     save_anchor_profile,
 )
@@ -44,6 +47,7 @@ class WindowCapturePanel(tk.Tk):
         self.title("Autoworks Window Capture")
         self.geometry("1120x560")
         self.resizable(False, False)
+        initialize_capture_backend()
 
         self.anchor = ensure_anchor_profile()
         self.windows: list[WindowInfo] = []
@@ -51,6 +55,7 @@ class WindowCapturePanel(tk.Tk):
         self.locked_hwnd: int | None = None
         self.locked_target: WindowPlacement | None = None
         self.lock_after_id: str | None = None
+        self.skip_next_lock_restore = False
         self.overlay: AnchorOverlay | None = None
         self.target_profile = load_target_profile()
 
@@ -216,6 +221,48 @@ class WindowCapturePanel(tk.Tk):
     def _box_text(self, placement: WindowPlacement) -> str:
         return f"{placement.left},{placement.top},{placement.width},{placement.height}"
 
+    def _placement_to_anchor_frame(self, placement: WindowPlacement) -> AnchorFrame:
+        return {
+            "x": placement.left,
+            "y": placement.top,
+            "width": placement.width,
+            "height": placement.height,
+        }
+
+    def _debug(self, message: str) -> None:
+        print(f"[window_capture] {message}", flush=True)
+
+    def _refresh_runtime_context_after_capture(self, screenshot_path: Path) -> str:
+        from modules.context_mapper.capture_context import (
+            DEFAULT_RUNTIME_CONTEXT_PATH,
+            build_runtime_context,
+        )
+
+        if not DEFAULT_RUNTIME_CONTEXT_PATH.exists():
+            message = "runtime context not refreshed: no existing runtime context"
+            self._debug(message)
+            return message
+
+        data = json.loads(DEFAULT_RUNTIME_CONTEXT_PATH.read_text(encoding="utf-8-sig"))
+        task_id = str(data.get("task_id", "")).strip()
+        if not task_id:
+            message = "runtime context not refreshed: missing task_id"
+            self._debug(message)
+            return message
+
+        updated = build_runtime_context(
+            task_id,
+            screenshot_path=screenshot_path,
+            output_path=DEFAULT_RUNTIME_CONTEXT_PATH,
+        )
+        image_size = updated.get("image_size", {})
+        message = (
+            f"runtime context refreshed for task_id={task_id} "
+            f"image_size={image_size.get('width')}x{image_size.get('height')}"
+        )
+        self._debug(message)
+        return message
+
     def _require_selected_hwnd(self) -> int | None:
         if self.selected_hwnd is None:
             messagebox.showwarning("No target selected", "Select one target window first.")
@@ -252,6 +299,7 @@ class WindowCapturePanel(tk.Tk):
 
         self.locked_hwnd = hwnd
         self.locked_target = snap_to_anchor(hwnd, self.anchor)
+        self.skip_next_lock_restore = False
         self._schedule_lock_check()
         self._update_overlay()
         self.status_var.set(f"Locked hwnd={hwnd} to AnchorFrame.")
@@ -271,6 +319,13 @@ class WindowCapturePanel(tk.Tk):
             self.unlock_selected()
             return
 
+        if self.skip_next_lock_restore:
+            self.skip_next_lock_restore = False
+            self._debug("restore skipped because locked target is active after capture")
+            self._update_overlay()
+            self._schedule_lock_check()
+            return
+
         restored = restore_if_moved_or_resized(self.locked_hwnd, self.locked_target)
         if restored:
             self.status_var.set(f"Restored hwnd={self.locked_hwnd} to AnchorFrame.")
@@ -284,12 +339,45 @@ class WindowCapturePanel(tk.Tk):
             self.lock_after_id = None
         self.locked_hwnd = None
         self.locked_target = None
+        self.skip_next_lock_restore = False
         self._update_overlay()
         self.status_var.set("Unlocked.")
 
     def capture_anchor(self) -> None:
-        output_path = capture_anchor_frame(self.anchor)
-        self.status_var.set(f"Captured AnchorFrame to {output_path}.")
+        capture_target: AnchorFrame | None = None
+        window_before: WindowPlacement | None = None
+
+        if self.locked_hwnd is not None and self.locked_target is not None:
+            capture_target = self._placement_to_anchor_frame(self.locked_target)
+            if is_valid_window(self.locked_hwnd):
+                window_before = get_window_placement(self.locked_hwnd)
+            self._debug(f"locked_target before capture: {self._box_text(self.locked_target)}")
+            self._debug(
+                "window rect before capture: "
+                f"{self._box_text(window_before) if window_before is not None else '<invalid>'}"
+            )
+
+        output_path = capture_anchor_frame(capture_target or self.anchor)
+
+        if self.locked_hwnd is not None and self.locked_target is not None:
+            window_after = None
+            if is_valid_window(self.locked_hwnd):
+                window_after = get_window_placement(self.locked_hwnd)
+            self._debug(
+                "window rect after capture: "
+                f"{self._box_text(window_after) if window_after is not None else '<invalid>'}"
+            )
+            if window_before == self.locked_target:
+                self.skip_next_lock_restore = True
+                self._debug("restore will be skipped because locked target is active")
+
+        try:
+            context_status = self._refresh_runtime_context_after_capture(output_path)
+        except Exception as exc:
+            context_status = f"runtime context refresh failed: {exc}"
+            self._debug(context_status)
+
+        self.status_var.set(f"Captured AnchorFrame to {output_path}. {context_status}.")
 
     def use_current_window_as_anchor(self) -> None:
         hwnd = self._require_selected_hwnd()
