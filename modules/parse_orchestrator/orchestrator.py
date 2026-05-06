@@ -76,6 +76,7 @@ def run_orchestrated_parse(
 
     requires_human_review = (
         plan.selected_strategy == "manual_review_required"
+        or bool(vision_result.error)
         or not metrics.validation_passed
         or "ambiguous" in " ".join(warnings).lower()
     )

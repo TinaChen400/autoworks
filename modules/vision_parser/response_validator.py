@@ -288,6 +288,64 @@ def _normalize_light_extracted(extracted: dict[str, Any], report: dict[str, Any]
     _drop_incomplete_light_bboxes(extracted, "$", report)
 
 
+def _uncertainty_message(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
+
+
+def _normalize_uncertainties(parsed: dict[str, Any], report: dict[str, Any]) -> None:
+    raw_uncertainties = parsed.get("uncertainties")
+    if raw_uncertainties is None:
+        parsed["uncertainties"] = []
+        return
+    if not isinstance(raw_uncertainties, list):
+        parsed["uncertainties"] = [
+            {
+                "type": "model_uncertainty",
+                "message": _uncertainty_message(raw_uncertainties),
+                "related_question_id": "",
+            }
+        ]
+        _add(
+            report,
+            "warnings",
+            "normalized_uncertainty",
+            "uncertainties",
+            "Converted non-list uncertainties to a model_uncertainty item.",
+        )
+        return
+
+    normalized_uncertainties: list[dict[str, Any]] = []
+    for uncertainty_index, uncertainty_value in enumerate(raw_uncertainties):
+        uncertainty_path = f"uncertainties[{uncertainty_index}]"
+        if isinstance(uncertainty_value, dict):
+            normalized = dict(uncertainty_value)
+            normalized["type"] = str(normalized.get("type") or "model_uncertainty")
+            normalized["message"] = str(normalized.get("message") or "")
+            normalized["related_question_id"] = str(normalized.get("related_question_id") or "")
+            normalized_uncertainties.append(normalized)
+            continue
+        normalized_uncertainties.append(
+            {
+                "type": "model_uncertainty",
+                "message": _uncertainty_message(uncertainty_value),
+                "related_question_id": "",
+            }
+        )
+        _add(
+            report,
+            "warnings",
+            "normalized_uncertainty",
+            uncertainty_path,
+            "Converted uncertainty item to a model_uncertainty object.",
+        )
+    parsed["uncertainties"] = normalized_uncertainties
+
+
 def _drop_incomplete_light_bboxes(value: Any, path: str, report: dict[str, Any]) -> None:
     if isinstance(value, list):
         for index, item in enumerate(value):
@@ -360,6 +418,7 @@ def validate_parsed_page_with_report(
         _normalize_light_extracted(extracted, report)
 
     parsed = normalize_parsed_page(extracted, task_id=str((runtime_context or {}).get("task_id", "")))
+    _normalize_uncertainties(parsed, report)
     supported = set(get_supported_question_types(runtime_context or {}))
     supported = supported.intersection(QUESTION_TYPES) or QUESTION_TYPES
 

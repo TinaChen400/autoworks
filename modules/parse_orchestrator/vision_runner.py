@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from modules.parse_orchestrator.parse_plan_store import load_if_exists
+from modules.parse_orchestrator.schema import new_id
 
 PARSED_PAGE_PATH = Path("runtime_state/latest_parsed_page.json")
 VALIDATION_REPORT_PATH = Path("runtime_state/latest_vision_validation_report.json")
@@ -49,22 +50,32 @@ def run_vision_parser(plan: dict[str, Any]) -> VisionRunResult:
             input_image=input_image,
         )
     except Exception as exc:  # noqa: BLE001 - preserve orchestrator outputs on parser failure.
-        validation = load_if_exists(VALIDATION_REPORT_PATH)
+        error = str(exc)
+        validation = _failure_validation_report(load_if_exists(VALIDATION_REPORT_PATH), error)
         return VisionRunResult(
-            parsed_page=load_if_exists(PARSED_PAGE_PATH),
+            parsed_page=_failure_parsed_page(plan, input_image, parser_type, error),
             validation_report=validation,
             model_calls_count=1,
-            validation_passed=bool(validation.get("validation_passed", validation.get("valid", False))),
+            validation_passed=False,
             warnings=warnings,
-            error=str(exc),
+            error=error,
         )
     validation = load_if_exists(VALIDATION_REPORT_PATH)
+    error = "" if isinstance(parsed, dict) else "Parser returned no parsed page."
+    if error:
+        validation = _failure_validation_report(validation, error)
     return VisionRunResult(
-        parsed_page=parsed or load_if_exists(PARSED_PAGE_PATH),
+        parsed_page=parsed if isinstance(parsed, dict) else _failure_parsed_page(
+            plan,
+            input_image,
+            parser_type,
+            error,
+        ),
         validation_report=validation,
         model_calls_count=1,
-        validation_passed=bool(validation.get("validation_passed", validation.get("valid", False))),
+        validation_passed=bool(validation.get("validation_passed", validation.get("valid", False))) and not error,
         warnings=warnings,
+        error=error,
     )
 
 
@@ -98,14 +109,79 @@ def _run_vision_parser_subprocess(
     error = ""
     if completed.returncode != 0:
         error = (completed.stderr or completed.stdout or "").strip()
+        if not error:
+            error = f"Vision parser subprocess failed with exit code {completed.returncode}."
+        validation = _failure_validation_report(validation, error)
     return VisionRunResult(
-        parsed_page=load_if_exists(PARSED_PAGE_PATH),
+        parsed_page=load_if_exists(PARSED_PAGE_PATH)
+        if completed.returncode == 0
+        else _failure_parsed_page(
+            plan,
+            selected_input_images[0] if selected_input_images else None,
+            str(plan.get("selected_parser_type", "general")),
+            error,
+        ),
         validation_report=validation,
         model_calls_count=1,
         validation_passed=bool(validation.get("validation_passed", validation.get("valid", False))) and completed.returncode == 0,
         warnings=warnings,
         error=error,
     )
+
+
+def _failure_parsed_page(
+    plan: dict[str, Any],
+    input_image: str | None,
+    parser_type: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "parse_id": new_id("parse_failed"),
+        "task_id": str(plan.get("task_id", "")),
+        "page": {
+            "page_type": "unknown",
+            "language": "unknown",
+            "page_status": "parse_failed",
+            "confidence": 0.0,
+        },
+        "questions": [],
+        "navigation_buttons": [],
+        "uncertainties": [
+            {
+                "type": "parse_failed",
+                "message": message,
+                "related_question_id": "",
+            }
+        ],
+        "visual_elements": [],
+        "metadata": {
+            "source": "parse_orchestrator",
+            "parse_failed": True,
+            "input_image_used": input_image or "",
+            "selected_parser_type": parser_type,
+        },
+    }
+
+
+def _failure_validation_report(
+    validation_report: dict[str, Any],
+    message: str,
+) -> dict[str, Any]:
+    if validation_report and validation_report.get("validation_passed") is False:
+        return validation_report
+    return {
+        "validation_passed": False,
+        "errors": [
+            {
+                "code": "parse_failed",
+                "path": "$",
+                "message": message,
+            }
+        ],
+        "warnings": [],
+        "info": [],
+        "normalization_applied": [],
+    }
 
 
 def _fake_result(plan: dict[str, Any], warnings: list[str]) -> VisionRunResult:

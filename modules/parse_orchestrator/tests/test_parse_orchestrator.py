@@ -9,9 +9,11 @@ from PIL import Image
 from modules.parse_orchestrator.input_loader import load_layout_index
 from modules.parse_orchestrator.metrics import build_metrics
 from modules.parse_orchestrator.orchestrator import run_orchestrated_parse
+from modules.parse_orchestrator.parse_plan_store import ORCHESTRATED_PARSE_PATH
 from modules.parse_orchestrator.strategy_selector import select_strategy
 from modules.parse_orchestrator.vision_runner import (
     MULTI_REGION_MVP_WARNING,
+    PARSED_PAGE_PATH,
     run_vision_parser,
 )
 
@@ -281,3 +283,94 @@ def test_vision_runner_warns_multi_region_mvp(monkeypatch: pytest.MonkeyPatch) -
     )
 
     assert MULTI_REGION_MVP_WARNING in result.warnings
+
+
+def test_vision_runner_current_failure_does_not_reuse_stale_parsed_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    PARSED_PAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PARSED_PAGE_PATH.write_text(
+        json.dumps(
+            {
+                "parse_id": "old_parse",
+                "task_id": "old_task",
+                "page": {"page_type": "form", "language": "en", "page_status": "active_question_page", "confidence": 0.9},
+                "questions": [
+                    {
+                        "question_id": "old_like_dislike",
+                        "question_type": "text_input",
+                        "question_stem": {"text": "What did you like or dislike?", "bbox_norm": None},
+                    }
+                ],
+                "navigation_buttons": [],
+                "uncertainties": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_parse_latest_runtime_context(**_kwargs: object) -> dict:
+        raise RuntimeError("simulated current parse failure")
+
+    monkeypatch.setattr(
+        "modules.vision_parser.parser.parse_latest_runtime_context",
+        fail_parse_latest_runtime_context,
+    )
+    result = run_vision_parser(
+        {
+            "task_id": "current_task",
+            "selected_mode": "fake",
+            "selected_parser_type": "survey",
+            "selected_input_images": ["runtime_state/crops/R9_card_license_annotated.png"],
+        }
+    )
+
+    assert result.validation_passed is False
+    assert result.parsed_page["task_id"] == "current_task"
+    assert result.parsed_page["page"]["page_status"] == "parse_failed"
+    assert result.parsed_page["questions"] == []
+    assert result.parsed_page["metadata"]["parse_failed"] is True
+    assert result.parsed_page["metadata"]["selected_parser_type"] == "survey"
+    assert result.parsed_page["uncertainties"][0]["message"] == "simulated current parse failure"
+
+
+def test_orchestrated_parse_failure_excludes_stale_like_dislike_questions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    PARSED_PAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PARSED_PAGE_PATH.write_text(
+        json.dumps(
+            {
+                "parse_id": "old_parse",
+                "task_id": "old_task",
+                "page": {"page_type": "form", "language": "en", "page_status": "active_question_page", "confidence": 0.9},
+                "questions": [
+                    {
+                        "question_id": "old_like_dislike",
+                        "question_type": "text_input",
+                        "question_stem": {"text": "What did you like or dislike?", "bbox_norm": None},
+                    }
+                ],
+                "navigation_buttons": [],
+                "uncertainties": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_parse_latest_runtime_context(**_kwargs: object) -> dict:
+        raise RuntimeError("simulated current parse failure")
+
+    monkeypatch.setattr(
+        "modules.vision_parser.parser.parse_latest_runtime_context",
+        fail_parse_latest_runtime_context,
+    )
+
+    report = run_orchestrated_parse(mode="fake")
+    orchestrated = json.loads(ORCHESTRATED_PARSE_PATH.read_text(encoding="utf-8"))
+
+    assert report["requires_human_review"] is True
+    assert orchestrated["requires_human_review"] is True
+    assert orchestrated["parsed_page"]["page"]["page_status"] == "parse_failed"
+    assert orchestrated["parsed_page"]["questions"] == []
+    assert "like or dislike" not in json.dumps(orchestrated["parsed_page"])

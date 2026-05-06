@@ -67,6 +67,26 @@ def test_validator_accepts_metadata() -> None:
     assert parsed["metadata"]["parser_type_used"] == "form"
 
 
+def test_validator_normalizes_string_uncertainties() -> None:
+    payload = sample_parsed_page("test_task")
+    payload["uncertainties"] = ["Duplicate identical survey questions are displayed."]
+
+    parsed, report = validate_parsed_page_with_report(
+        json.dumps(payload),
+        {"task_id": "test_task", "supported_question_types": ["unknown"]},
+    )
+
+    assert parsed["uncertainties"] == [
+        {
+            "type": "model_uncertainty",
+            "message": "Duplicate identical survey questions are displayed.",
+            "related_question_id": "",
+        }
+    ]
+    assert report["validation_passed"] is True
+    assert any(item["code"] == "normalized_uncertainty" for item in report["warnings"])
+
+
 def test_validator_rejects_invalid_bbox_norm() -> None:
     payload = sample_parsed_page("test_task")
     payload["questions"][0]["question_stem"]["bbox_norm"]["x"] = 1.5
@@ -134,10 +154,24 @@ def test_fake_mode_accepts_input_image_path() -> None:
     assert parsed["metadata"]["input_image_used"] == str(image_path)
 
 
-def test_fake_mode_can_load_parse_plan() -> None:
+def test_fake_mode_can_load_parse_plan(tmp_path: Path) -> None:
+    image_path = tmp_path / "plan_input.png"
+    Image.new("RGB", (100, 80), "white").save(image_path)
+    parse_plan_path = tmp_path / "parse_plan.json"
+    parse_plan_path.write_text(
+        json.dumps(
+            {
+                "selected_parser_type": "form",
+                "selected_output_level": "standard",
+                "selected_input_images": [str(image_path)],
+                "selected_region_ids": ["R1"],
+            }
+        ),
+        encoding="utf-8",
+    )
     parsed = parse_latest_runtime_context(
         mode="fake",
-        from_parse_plan="runtime_state/latest_parse_plan.json",
+        from_parse_plan=parse_plan_path,
     )
     assert parsed["metadata"]["parse_plan_used"] is True
     assert parsed["metadata"]["parser_type_used"] == "form"
