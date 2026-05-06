@@ -7,6 +7,10 @@ import pytest
 from PIL import Image
 
 from modules.parse_orchestrator.input_loader import load_layout_index
+from modules.parse_orchestrator.local_form_parser import (
+    normalize_yes_no_option,
+    parse_local_survey_page,
+)
 from modules.parse_orchestrator.metrics import build_metrics
 from modules.parse_orchestrator.orchestrator import run_orchestrated_parse
 from modules.parse_orchestrator.parse_plan_store import ORCHESTRATED_PARSE_PATH
@@ -14,6 +18,7 @@ from modules.parse_orchestrator.strategy_selector import select_strategy
 from modules.parse_orchestrator.vision_runner import (
     MULTI_REGION_MVP_WARNING,
     PARSED_PAGE_PATH,
+    VisionRunResult,
     run_vision_parser,
 )
 
@@ -89,6 +94,45 @@ def _config() -> dict:
             "scene_scan",
         ],
     }
+
+
+def _text_block(text_id: str, text: str, x: float, y: float, width: float = 0.2, height: float = 0.04) -> dict:
+    return {
+        "text_id": text_id,
+        "text": text,
+        "bbox_norm": {"x": x, "y": y, "width": width, "height": height},
+        "bbox_raw": {
+            "x": int(x * 1000),
+            "y": int(y * 1000),
+            "width": int(width * 1000),
+            "height": int(height * 1000),
+        },
+        "confidence": 0.9,
+        "source": "ocr",
+    }
+
+
+def _rapidocr_yes_no_layout(*, duplicate: bool = False) -> dict:
+    blocks = [
+        _text_block("T1", "Do you play any role in the benefits decision process at your", 0.1, 0.2, 0.55),
+        _text_block("T2", "place of employment, including but not limited to any roles", 0.1, 0.25, 0.55),
+        _text_block("T3", "such as Plan Sponsor, HR or Benefits Manager?", 0.1, 0.3, 0.45),
+        _text_block("T4", "OYes", 0.12, 0.39, 0.08),
+        _text_block("T5", "O No", 0.12, 0.45, 0.08),
+        _text_block("T6", "Next", 0.8, 0.56, 0.08),
+    ]
+    if duplicate:
+        blocks.extend(
+            [
+                _text_block("T7", "Do you play any role in the benefits decision process at your", 0.1, 0.62, 0.55),
+                _text_block("T8", "placeofemployment,including butnotlimitedtoanyroes", 0.1, 0.67, 0.55),
+                _text_block("T9", "such as Plan Sponsor, HR or Benefits Manager?", 0.1, 0.72, 0.45),
+                _text_block("T10", "OYes", 0.12, 0.8, 0.08),
+                _text_block("T11", "O No", 0.12, 0.86, 0.08),
+                _text_block("T12", "Next", 0.8, 0.94, 0.08),
+            ]
+        )
+    return {"text_blocks": blocks}
 
 
 def test_load_layout_index_fixture() -> None:
@@ -177,6 +221,106 @@ def test_metrics_accepts_legacy_valid_field() -> None:
     )
 
     assert metrics.validation_passed is True
+
+
+def test_local_parser_normalizes_ocr_radio_yes_no_labels() -> None:
+    assert normalize_yes_no_option("OYes") == "Yes"
+    assert normalize_yes_no_option("O No") == "No"
+    assert normalize_yes_no_option("\u25cbYes") == "Yes"
+    assert normalize_yes_no_option("\u25cb No") == "No"
+
+
+def test_local_parser_produces_duplicate_single_choice_questions() -> None:
+    result = parse_local_survey_page(
+        _rapidocr_yes_no_layout(duplicate=True),
+        {"task_id": "test_task", "supported_question_types": ["single_choice"]},
+    )
+
+    assert result.validation_passed is True
+    assert result.confidence >= 0.75
+    assert result.parsed_page["metadata"] == {
+        "source": "rapidocr_local_parser",
+        "ocr_backend": "rapidocr",
+    }
+    assert [question["question_id"] for question in result.parsed_page["questions"]] == ["q1", "q2"]
+    assert [question["question_type"] for question in result.parsed_page["questions"]] == [
+        "single_choice",
+        "single_choice",
+    ]
+    assert [option["label"] for option in result.parsed_page["questions"][0]["answer_options"]] == ["Yes", "No"]
+
+
+def test_local_parser_options_include_bbox_and_click_point() -> None:
+    result = parse_local_survey_page(
+        _rapidocr_yes_no_layout(),
+        {"task_id": "test_task", "supported_question_types": ["single_choice"]},
+    )
+    option = result.parsed_page["questions"][0]["answer_options"][0]
+
+    assert option["bbox_norm"] == {"x": 0.12, "y": 0.39, "width": 0.08, "height": 0.04}
+    assert option["click_point_norm"] == {"x": 0.16, "y": 0.41}
+
+
+def test_orchestrator_uses_local_parser_without_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fail_if_called(_plan: dict) -> VisionRunResult:
+        raise AssertionError("Doubao/vision parser should not be called when local parsing passes.")
+
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_runtime_context", lambda: _runtime_context(tmp_path))
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_layout_index", lambda: _rapidocr_yes_no_layout())
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_config", lambda: {**_config(), "prefer_local_parser": True})
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.run_vision_parser", fail_if_called)
+
+    report = run_orchestrated_parse(mode="doubao")
+    orchestrated = json.loads(ORCHESTRATED_PARSE_PATH.read_text(encoding="utf-8"))
+
+    assert report["model_calls_count"] == 0
+    assert report["validation_passed"] is True
+    assert orchestrated["parsed_page"]["metadata"]["source"] == "rapidocr_local_parser"
+
+
+def test_local_parser_failure_falls_back_without_reusing_stale_parse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    PARSED_PAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PARSED_PAGE_PATH.write_text(
+        json.dumps({"questions": [{"question_stem": {"text": "stale should not appear"}}]}),
+        encoding="utf-8",
+    )
+
+    fallback_page = {
+        "parse_id": "current_fallback",
+        "task_id": "test_task",
+        "page": {"page_type": "form", "language": "en", "page_status": "active_question_page", "confidence": 0.8},
+        "questions": [],
+        "navigation_buttons": [],
+        "uncertainties": [],
+        "visual_elements": [],
+    }
+
+    def fallback(_plan: dict) -> VisionRunResult:
+        return VisionRunResult(
+            parsed_page=fallback_page,
+            validation_report={"validation_passed": True, "errors": []},
+            model_calls_count=1,
+            validation_passed=True,
+        )
+
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_runtime_context", lambda: _runtime_context(tmp_path))
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_layout_index", lambda: {"text_blocks": [_text_block("T1", "Only a stem", 0.1, 0.2)]})
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_config", lambda: {**_config(), "prefer_local_parser": True, "fallback_to_doubao": True})
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.run_vision_parser", fallback)
+
+    report = run_orchestrated_parse(mode="doubao")
+    orchestrated = json.loads(ORCHESTRATED_PARSE_PATH.read_text(encoding="utf-8"))
+
+    assert report["model_calls_count"] == 1
+    assert report["validation_passed"] is True
+    assert orchestrated["parsed_page"]["parse_id"] == "current_fallback"
+    assert "stale should not appear" not in json.dumps(orchestrated["parsed_page"])
 
 
 def test_zero_detector_scores_selects_general_annotated_overview(tmp_path: Path) -> None:
@@ -364,6 +508,10 @@ def test_orchestrated_parse_failure_excludes_stale_like_dislike_questions(
     monkeypatch.setattr(
         "modules.vision_parser.parser.parse_latest_runtime_context",
         fail_parse_latest_runtime_context,
+    )
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.load_config",
+        lambda: {**_config(), "prefer_local_parser": False},
     )
 
     report = run_orchestrated_parse(mode="fake")
