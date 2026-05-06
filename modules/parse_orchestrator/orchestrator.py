@@ -8,7 +8,9 @@ from modules.parse_orchestrator.input_loader import (
     load_config,
     load_layout_index,
     load_runtime_context,
+    write_json,
 )
+from modules.parse_orchestrator.local_form_parser import parse_local_survey_page
 from modules.parse_orchestrator.metrics import build_metrics
 from modules.parse_orchestrator.parse_plan_store import (
     ORCHESTRATED_PARSE_PATH,
@@ -54,15 +56,46 @@ def run_orchestrated_parse(
     plan_data = plan.to_dict()
     save_parse_plan(plan_data)
 
-    vision_result = run_vision_parser(plan_data)
+    local_result = None
+    local_fallback_reason = ""
+    execution_plan_data = plan_data
+    if bool(config.get("prefer_local_parser", True)):
+        local_result = parse_local_survey_page(layout_index, runtime_context)
+        local_min_confidence = float(config.get("local_parser_min_confidence", 0.75) or 0.75)
+        if (
+            local_result.validation_passed
+            and local_result.confidence >= local_min_confidence
+            and local_result.parsed_page
+        ):
+            write_json(PARSED_PAGE_PATH, local_result.parsed_page)
+            write_json(VALIDATION_REPORT_PATH, local_result.validation_report)
+            vision_result = local_result
+        else:
+            local_fallback_reason = local_result.error or "Local parser confidence or validation was insufficient."
+            if bool(config.get("fallback_to_doubao", True)):
+                fallback_plan = dict(plan_data)
+                if mode != "fake":
+                    fallback_plan["selected_mode"] = "doubao"
+                    fallback_plan["selected_output_level"] = "light"
+                execution_plan_data = fallback_plan
+                vision_result = run_vision_parser(fallback_plan)
+            else:
+                write_json(PARSED_PAGE_PATH, local_result.parsed_page)
+                write_json(VALIDATION_REPORT_PATH, local_result.validation_report)
+                vision_result = local_result
+    else:
+        vision_result = run_vision_parser(plan_data)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    warnings = list(decision.warnings) + list(vision_result.warnings)
-    fallback_used = bool(vision_result.error)
-    fallback_reason = vision_result.error
+    warnings = list(decision.warnings)
+    if local_result is not None and local_result.error and vision_result is not local_result:
+        warnings.extend(local_result.warnings)
+    warnings.extend(vision_result.warnings)
+    fallback_used = bool(vision_result.error) or bool(local_fallback_reason and vision_result is not local_result)
+    fallback_reason = vision_result.error or local_fallback_reason
     if vision_result.error:
         warnings.append(vision_result.error)
     metrics = build_metrics(
-        plan=plan_data,
+        plan=execution_plan_data,
         parsed_page=vision_result.parsed_page,
         validation_report=vision_result.validation_report,
         model_calls_count=vision_result.model_calls_count,

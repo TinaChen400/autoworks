@@ -20,6 +20,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "fallback_to_full_screenshot": True,
     "safe_crop_required_for_crop_only_parse": True,
     "minimum_detector_score_for_direct_parse": 0.5,
+    "prefer_local_parser": True,
+    "local_parser_min_confidence": 0.75,
+    "fallback_to_doubao": True,
     "allowed_parser_types": [
         "form",
         "survey",
