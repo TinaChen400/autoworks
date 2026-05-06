@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from modules.parse_orchestrator.input_loader import load_layout_index
+from modules.parse_orchestrator.metrics import build_metrics
 from modules.parse_orchestrator.orchestrator import run_orchestrated_parse
 from modules.parse_orchestrator.strategy_selector import select_strategy
 from modules.parse_orchestrator.vision_runner import (
@@ -144,6 +145,36 @@ def test_fake_mode_outputs_are_valid_json() -> None:
         Path("runtime_state/latest_orchestrated_parse.json"),
     ]:
         assert json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_metrics_prefers_validation_passed_field() -> None:
+    metrics = build_metrics(
+        plan={},
+        parsed_page={},
+        validation_report={"validation_passed": True, "valid": False, "errors": []},
+        model_calls_count=1,
+        elapsed_time_ms=0,
+        fallback_used=False,
+        fallback_reason="",
+        warnings=[],
+    )
+
+    assert metrics.validation_passed is True
+
+
+def test_metrics_accepts_legacy_valid_field() -> None:
+    metrics = build_metrics(
+        plan={},
+        parsed_page={},
+        validation_report={"valid": True, "errors": []},
+        model_calls_count=1,
+        elapsed_time_ms=0,
+        fallback_used=False,
+        fallback_reason="",
+        warnings=[],
+    )
+
+    assert metrics.validation_passed is True
 
 
 def test_zero_detector_scores_selects_general_annotated_overview(tmp_path: Path) -> None:

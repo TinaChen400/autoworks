@@ -24,7 +24,9 @@ def build_metrics(
         mode_used=str(plan.get("selected_mode", "")),
         model_calls_count=model_calls_count,
         elapsed_time_ms=elapsed_time_ms,
-        validation_passed=bool(validation_report.get("valid", False)),
+        validation_passed=bool(
+            validation_report.get("validation_passed", validation_report.get("valid", False))
+        ),
         final_page_type=str(page.get("page_type", "unknown")),
         final_confidence=float(page.get("confidence", 0.0) or 0.0),
         fallback_used=fallback_used,
