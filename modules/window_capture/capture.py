@@ -101,6 +101,12 @@ def save_anchor_profile(anchor: AnchorProfile, path: Path = DEFAULT_CONFIG_PATH)
     return saved
 
 
+def initialize_capture_backend() -> None:
+    """Initialize mss before window lock state is captured."""
+    with mss.mss():
+        pass
+
+
 def capture_anchor_frame(
     anchor: AnchorProfile | AnchorFrame | None = None,
     output_path: Path = DEFAULT_CAPTURE_PATH,
