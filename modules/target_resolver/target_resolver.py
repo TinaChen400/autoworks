@@ -6,9 +6,121 @@ from typing import Any
 
 from . import resolved_action_store
 from .coordinate_converter import norm_to_screen
-from .option_matcher import find_control, find_option, option_text
+from .option_matcher import find_control, find_option, option_text, parsed_page
 from .schema import COORDINATE_KEYS, new_resolved_plan, now_iso, unresolved_issue
 from .target_resolver_validator import validate_resolved_action_plan
+
+
+def _numeric_point(point: Any) -> dict[str, float] | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        x = float(point["x"])
+        y = float(point["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not 0.0 <= x <= 1.0 or not 0.0 <= y <= 1.0:
+        return None
+    return {"x": round(x, 6), "y": round(y, 6)}
+
+
+def _numeric_bbox_center(bbox: Any) -> dict[str, float] | None:
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        x = float(bbox["x"])
+        y = float(bbox["y"])
+        width = float(bbox["width"])
+        height = float(bbox["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width < 0.0 or height < 0.0:
+        return None
+    center = {"x": x + (width / 2.0), "y": y + (height / 2.0)}
+    return _numeric_point(center)
+
+
+def _number(data: dict[str, Any], key: str) -> float | None:
+    try:
+        return float(data[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _inside_rect(point: dict[str, int], rect: dict[str, Any]) -> bool:
+    x = _number(rect, "x")
+    y = _number(rect, "y")
+    width = _number(rect, "width")
+    height = _number(rect, "height")
+    if x is None or y is None or width is None or height is None:
+        return False
+    if width < 0 or height < 0:
+        return False
+    return x <= point["x"] <= x + width and y <= point["y"] <= y + height
+
+
+def _inside_anchor_model_bounds(
+    click_point_raw: dict[str, int],
+    click_point_screen: dict[str, int],
+    runtime_context: dict[str, Any],
+) -> bool:
+    model_region = runtime_context.get("model_input_region")
+    anchor = runtime_context.get("anchor_frame")
+    if not isinstance(model_region, dict) or not isinstance(anchor, dict):
+        return False
+    if not _inside_rect(click_point_raw, model_region):
+        return False
+    anchor_model_bounds = {
+        "x": (_number(anchor, "x") or 0.0) + (_number(model_region, "x") or 0.0),
+        "y": (_number(anchor, "y") or 0.0) + (_number(model_region, "y") or 0.0),
+        "width": _number(model_region, "width"),
+        "height": _number(model_region, "height"),
+    }
+    if not _inside_rect(click_point_screen, anchor_model_bounds):
+        return False
+    return _inside_rect(click_point_screen, anchor)
+
+
+def _find_exact_parsed_option(
+    orchestrated_parse: dict[str, Any],
+    question_id: Any,
+    option_id: Any,
+) -> dict[str, Any] | None:
+    page = parsed_page(orchestrated_parse)
+    for question in page.get("questions", []) or []:
+        if not isinstance(question, dict) or question.get("question_id") != question_id:
+            continue
+        for option in question.get("answer_options", []) or []:
+            if isinstance(option, dict) and option.get("option_id") == option_id:
+                return option
+    return None
+
+
+def _resolve_from_parsed_geometry(
+    option: dict[str, Any],
+    runtime_context: dict[str, Any],
+) -> dict[str, Any] | None:
+    click_point_norm = _numeric_point(option.get("click_point_norm"))
+    resolver_confidence = 0.85
+    resolver_source = "parsed_option_geometry"
+    if click_point_norm is None:
+        click_point_norm = _numeric_bbox_center(option.get("bbox_norm"))
+        resolver_confidence = 0.8
+        resolver_source = "parsed_option_bbox_center"
+    if click_point_norm is None:
+        return None
+
+    click_point_raw, click_point_screen = norm_to_screen(click_point_norm, runtime_context)
+    if not _inside_anchor_model_bounds(click_point_raw, click_point_screen, runtime_context):
+        return None
+
+    return {
+        "click_point_norm": click_point_norm,
+        "click_point_raw": click_point_raw,
+        "click_point_screen": click_point_screen,
+        "resolver_confidence": resolver_confidence,
+        "resolver_source": resolver_source,
+    }
 
 
 def _strip_coordinates(value: Any) -> Any:
@@ -44,8 +156,29 @@ def resolve_action_plan(
             continue
 
         target = resolved.get("target") if isinstance(resolved.get("target"), dict) else {}
-        question_id = str(target.get("question_id", ""))
-        option_id = str(target.get("option_id", ""))
+        question_id_value = target.get("question_id", "")
+        option_id_value = target.get("option_id", "")
+        question_id = str(question_id_value)
+        option_id = str(option_id_value)
+
+        parsed_option = _find_exact_parsed_option(orchestrated_parse, question_id_value, option_id_value)
+        parsed_geometry = (
+            _resolve_from_parsed_geometry(parsed_option, runtime_context)
+            if parsed_option is not None
+            else None
+        )
+        if parsed_geometry is not None:
+            resolved["target"] = {
+                "question_id": question_id,
+                "option_id": option_id,
+                "option_text": option_text(parsed_option),
+                "control_element_id": "",
+                "control_type": str(parsed_option.get("selection_control") or "unknown"),
+                **parsed_geometry,
+            }
+            actions.append(resolved)
+            continue
+
         option = find_option(orchestrated_parse, question_id, option_id)
         if option is None:
             issues.append(

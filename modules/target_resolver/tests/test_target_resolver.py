@@ -82,6 +82,22 @@ def _orchestrated_parse() -> dict:
     }
 
 
+def _orchestrated_parse_with_option_geometry(
+    click_point_norm: dict | None = None,
+    bbox_norm: dict | None = None,
+) -> dict:
+    option = {
+        "option_id": "o1",
+        "text": "Retail Central",
+        "selection_control": "radio",
+    }
+    if click_point_norm is not None:
+        option["click_point_norm"] = click_point_norm
+    if bbox_norm is not None:
+        option["bbox_norm"] = bbox_norm
+    return {"parsed_page": {"questions": [{"question_id": "q1", "answer_options": [option]}]}}
+
+
 def _layout_index() -> dict:
     return {
         "elements": [
@@ -135,6 +151,43 @@ def test_request_human_review_preservation() -> None:
     assert "click_point_norm" not in json.dumps(resolved["actions"][0])
 
 
+def test_click_option_resolves_from_parsed_click_point_norm() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_option", "o1"),
+        _orchestrated_parse_with_option_geometry(click_point_norm={"x": 0.3925, "y": 0.5575}),
+        _layout_index(),
+        _runtime_context(),
+    )
+
+    target = resolved["actions"][0]["target"]
+    assert report["validation_passed"] is True
+    assert target["click_point_norm"] == {"x": 0.3925, "y": 0.5575}
+    assert target["click_point_raw"] == {"x": 88, "y": 76}
+    assert target["click_point_screen"] == {"x": 188, "y": 276}
+    assert target["resolver_confidence"] == 0.85
+    assert target["resolver_confidence"] >= 0.5
+    assert target["resolver_source"] == "parsed_option_geometry"
+
+
+def test_click_option_resolves_from_parsed_bbox_center_when_click_point_missing() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_option", "o1"),
+        _orchestrated_parse_with_option_geometry(
+            bbox_norm={"x": 0.37, "y": 0.54, "width": 0.045, "height": 0.035}
+        ),
+        _layout_index(),
+        _runtime_context(),
+    )
+
+    target = resolved["actions"][0]["target"]
+    assert report["validation_passed"] is True
+    assert target["click_point_norm"] == {"x": 0.3925, "y": 0.5575}
+    assert target["click_point_raw"] == {"x": 88, "y": 76}
+    assert target["click_point_screen"] == {"x": 188, "y": 276}
+    assert target["resolver_confidence"] == 0.8
+    assert target["resolver_source"] == "parsed_option_bbox_center"
+
+
 def test_click_option_resolution() -> None:
     resolved, report = resolve_action_plan(
         _action_plan("click_option", "o1"),
@@ -154,6 +207,7 @@ def test_click_option_resolution() -> None:
     assert target["click_point_raw"] == {"x": 60, "y": 70}
     assert target["click_point_screen"] == {"x": 160, "y": 270}
     assert target["resolver_confidence"] == 0.8
+    assert "resolver_source" not in target
 
 
 def test_invalid_option_id_generates_validation_issue() -> None:

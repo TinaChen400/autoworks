@@ -140,6 +140,17 @@ def test_valid_resolved_click_option_allows_execution() -> None:
     assert gate["executable_actions"] == [action]
 
 
+def test_high_confidence_parsed_geometry_click_option_allows_execution() -> None:
+    action = _click_action(confidence=0.85)
+    action["target"]["resolver_source"] = "parsed_option_geometry"
+
+    gate, report = evaluate_execution_gate(_resolved_plan(actions=[action]), _target_report())
+
+    assert report["validation_passed"] is True
+    assert gate["execution_allowed"] is True
+    assert gate["executable_actions"] == [action]
+
+
 def test_low_resolver_confidence_blocks_execution() -> None:
     gate, _report = evaluate_execution_gate(
         _resolved_plan(actions=[_click_action(confidence=0.49)]),
