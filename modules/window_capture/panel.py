@@ -11,6 +11,7 @@ if __package__ in {None, ""}:
 
 from modules.window_capture.capture import (
     ALLOWED_SCALES,
+    PROJECT_ROOT,
     capture_anchor_frame,
     ensure_anchor_profile,
     resolve_anchor_frame,
@@ -288,8 +289,10 @@ class WindowCapturePanel(tk.Tk):
         self.status_var.set("Unlocked.")
 
     def capture_anchor(self) -> None:
-        output_path = capture_anchor_frame(self.anchor)
-        self.status_var.set(f"Captured AnchorFrame to {output_path}.")
+        output_path = PROJECT_ROOT / "runtime_state" / "latest_capture.png"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        capture_anchor_frame(self.anchor, output_path=output_path)
+        self.status_var.set("Captured AnchorFrame to runtime_state/latest_capture.png")
 
     def use_current_window_as_anchor(self) -> None:
         hwnd = self._require_selected_hwnd()

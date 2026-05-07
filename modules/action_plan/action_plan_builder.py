@@ -10,6 +10,8 @@ from .schema import action, new_action_plan
 
 HUMAN_REVIEW_TYPES = {"unknown", "matrix", "image", "image_task"}
 ACTION_PLAN_ARTIFACT_PATH = "runtime_state/latest_action_plan.json"
+RAW_DECISION_ARTIFACT_PATH = "runtime_state/latest_answer_decision.json"
+REVIEWED_DECISION_ARTIFACT_PATH = "runtime_state/latest_reviewed_answer_decision.json"
 
 
 def _current_page(session: dict, decision: dict) -> dict:
@@ -118,6 +120,52 @@ def _review_action(action_id: str, qd: dict, question: dict, reason: str = "") -
     )
 
 
+def _valid_reviewed_decision(raw_decision: dict) -> tuple[dict | None, dict | None]:
+    reviewed_path = action_plan_store.REVIEWED_DECISION_PATH
+    review_report_path = action_plan_store.HUMAN_REVIEW_REPORT_PATH
+    if not reviewed_path.exists() or not review_report_path.exists():
+        return None, None
+
+    reviewed_decision = action_plan_store.load_json(reviewed_path)
+    review_report = action_plan_store.load_json(review_report_path)
+    if review_report.get("validation_passed") is not True:
+        return None, None
+    if review_report.get("requires_human_review") is not False:
+        return None, None
+    if reviewed_decision.get("requires_human_review") is not False:
+        return None, None
+    if reviewed_decision.get("source_decision_id") != raw_decision.get("decision_id"):
+        return None, None
+    return reviewed_decision, review_report
+
+
+def _load_inputs(source: str) -> tuple[dict, dict, dict, dict]:
+    session, raw_decision, answer_report = action_plan_store.load_inputs()
+    meta = {
+        "human_review_applied": False,
+        "source_decision_type": "answer_decision",
+        "source_decision_path": RAW_DECISION_ARTIFACT_PATH,
+        "source_raw_decision_id": raw_decision.get("decision_id", ""),
+    }
+
+    if source == "auto":
+        reviewed_decision, review_report = _valid_reviewed_decision(raw_decision)
+        if reviewed_decision is not None and review_report is not None:
+            meta.update(
+                {
+                    "human_review_applied": True,
+                    "source_decision_type": "reviewed_answer_decision",
+                    "source_decision_path": REVIEWED_DECISION_ARTIFACT_PATH,
+                    "source_raw_decision_id": reviewed_decision.get(
+                        "source_decision_id", raw_decision.get("decision_id", "")
+                    ),
+                }
+            )
+            return session, reviewed_decision, review_report, meta
+
+    return session, raw_decision, answer_report, meta
+
+
 def _actions_for_decision(qd: dict, question: dict) -> list[dict]:
     question_id = qd.get("question_id", "")
     question_type = qd.get("question_type") or question.get("question_type", "unknown")
@@ -172,8 +220,7 @@ def _actions_for_decision(qd: dict, question: dict) -> list[dict]:
 
 
 def build_action_plan(source: str = "auto") -> tuple[dict, dict]:
-    _ = source
-    session, decision, answer_report = action_plan_store.load_inputs()
+    session, decision, answer_report, input_meta = _load_inputs(source)
     page = _current_page(session, decision)
     source_page = _load_source_parse_page(decision)
 
@@ -212,8 +259,29 @@ def build_action_plan(source: str = "auto") -> tuple[dict, dict]:
         actions=actions,
         warnings=list(decision.get("warnings", [])) + list(answer_report.get("warnings", [])),
     )
+    plan.update(input_meta)
 
     report = validate_action_plan(plan)
+    request_human_review_count = sum(
+        1 for item in plan.get("actions", []) if item.get("skill") == "request_human_review"
+    )
+    report.update(
+        {
+            "source_decision_type": input_meta["source_decision_type"],
+            "human_review_applied": input_meta["human_review_applied"],
+            "decision_requires_human_review": bool(decision.get("requires_human_review")),
+            "request_human_review_count": request_human_review_count,
+            "executable_action_count": sum(
+                1
+                for item in plan.get("actions", [])
+                if item.get("skill") != "request_human_review"
+            ),
+            "warnings": list(report.get("warnings", []))
+            + list(decision.get("warnings", []))
+            + list(answer_report.get("warnings", [])),
+            "errors": list(report.get("issues", [])),
+        }
+    )
     if not report["validation_passed"]:
         plan["status"] = "invalid"
 
