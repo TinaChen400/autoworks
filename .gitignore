@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -29,7 +29,7 @@ dist/
 .idea/
 .vscode/
 Thumbs.db
-Desktop.ini、
+Desktop.ini
 
 # Test screenshots
 tests/fixtures/latest_capture.png
@@ -39,3 +39,5 @@ runtime_state/
 
 # Secrets
 config/secrets.json
+runtime_state_backup/
+runtime_state_backup/
