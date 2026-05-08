@@ -38,6 +38,13 @@ def _click_point_raw(action: dict[str, Any]) -> dict[str, Any] | None:
     return {"x": click_point["x"], "y": click_point["y"]}
 
 
+def _click_candidates(action: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = _target(action).get("click_candidates")
+    if not isinstance(candidates, list):
+        return []
+    return [deepcopy(candidate) for candidate in candidates if isinstance(candidate, dict)]
+
+
 def _click_point_from_record(record: dict[str, Any]) -> tuple[int, int] | None:
     click_point = record.get("click_point_raw")
     if not isinstance(click_point, dict):
@@ -72,6 +79,7 @@ def _click_option_record(
         "option_text": target.get("option_text", ""),
         "click_point_screen": click_point,
         "click_point_raw": _click_point_raw(action),
+        "click_candidates": _click_candidates(action),
         "real_execution": False,
     }, None
 
@@ -106,6 +114,7 @@ def _atomic_step_record(
         "step_index": step_index,
         "click_point_screen": click_point,
         "click_point_raw": _click_point_raw(step) or _click_point_raw(source_action),
+        "click_candidates": _click_candidates(step) or _click_candidates(source_action),
         "real_execution": False,
     }, None
 
@@ -135,6 +144,7 @@ def _action_summary(action: dict[str, Any]) -> dict[str, Any]:
         "option_text": target.get("option_text", ""),
         "click_point_screen": _click_point_screen(action),
         "click_point_raw": _click_point_raw(action),
+        "click_candidates": _click_candidates(action),
     }
 
 
@@ -346,6 +356,7 @@ def _draw_click_preview_image(
     font = ImageFont.load_default()
     width, height = image.size
     marker_color = (255, 32, 32)
+    candidate_color = (32, 96, 255)
     text_fill = (255, 255, 255)
     text_background = (20, 20, 20)
 
@@ -375,6 +386,38 @@ def _draw_click_preview_image(
             continue
 
         radius = 10
+        secondary_candidate_index = 0
+        for candidate in record.get("click_candidates", []) or []:
+            if not isinstance(candidate, dict) or candidate.get("is_primary") is True:
+                continue
+            secondary_candidate_index += 1
+            candidate_point = candidate.get("click_point_raw")
+            if not isinstance(candidate_point, dict):
+                continue
+            try:
+                candidate_x = int(round(float(candidate_point["x"])))
+                candidate_y = int(round(float(candidate_point["y"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if candidate_x < 0 or candidate_y < 0 or candidate_x >= width or candidate_y >= height:
+                continue
+            candidate_radius = 6
+            draw.ellipse(
+                (
+                    candidate_x - candidate_radius,
+                    candidate_y - candidate_radius,
+                    candidate_x + candidate_radius,
+                    candidate_y + candidate_radius,
+                ),
+                outline=candidate_color,
+                width=2,
+            )
+            draw.text(
+                (candidate_x + 8, candidate_y - 8),
+                f"c{secondary_candidate_index}",
+                fill=candidate_color,
+                font=font,
+            )
         draw.ellipse((x - radius, y - radius, x + radius, y + radius), outline=marker_color, width=3)
         draw.line((x - radius - 5, y, x + radius + 5, y), fill=marker_color, width=2)
         draw.line((x, y - radius - 5, x, y + radius + 5), fill=marker_color, width=2)

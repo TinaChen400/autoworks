@@ -141,6 +141,22 @@ def _empty_layout_index() -> dict:
     return {"elements": [], "text_blocks": [], "relationships": []}
 
 
+def _layout_index_with_nearby_visual_control() -> dict:
+    return {
+        "elements": [
+            {
+                "element_id": "E_near",
+                "element_type_hint": "icon_like",
+                "click_point_norm": {"x": 0.392, "y": 0.544},
+                "click_point_raw": {"x": 78, "y": 54},
+                "confidence": 0.87,
+            }
+        ],
+        "text_blocks": [],
+        "relationships": [],
+    }
+
+
 def _runtime_context() -> dict:
     return {
         "model_input_region": {"x": 10, "y": 20, "width": 200, "height": 100},
@@ -221,6 +237,9 @@ def test_radio_option_with_inferred_bbox_center_uses_left_biased_control_point()
     assert target["adjusted_click_point_norm"] == {"x": 0.38, "y": 0.556}
     assert target["selection_control"] == "radio"
     assert target["adjustment_reason"] == "parsed click point was inferred from option bbox center"
+    assert target["click_candidates"][0]["source"] == "radio_control_left_bias"
+    assert target["click_candidates"][0]["is_primary"] is True
+    assert target["click_candidates"][0]["click_point_raw"] == {"x": 86, "y": 76}
 
 
 def test_checkbox_option_with_inferred_bbox_center_uses_left_biased_control_point() -> None:
@@ -240,6 +259,7 @@ def test_checkbox_option_with_inferred_bbox_center_uses_left_biased_control_poin
     assert target["click_point_norm"] == {"x": 0.38, "y": 0.556}
     assert target["resolver_source"] == "radio_control_left_bias"
     assert target["selection_control"] == "checkbox"
+    assert target["click_candidates"][0]["source"] == "radio_control_left_bias"
 
 
 def test_non_radio_option_keeps_original_parsed_click_point_norm() -> None:
@@ -301,6 +321,41 @@ def test_click_option_resolution() -> None:
     assert target["click_point_screen"] == {"x": 160, "y": 270}
     assert target["resolver_confidence"] == 0.8
     assert target["resolver_source"] == "possible_option_label"
+    assert target["click_candidates"] == [
+        {
+            "source": "possible_option_label",
+            "click_point_norm": {"x": 0.25, "y": 0.5},
+            "click_point_raw": {"x": 60, "y": 70},
+            "click_point_screen": {"x": 160, "y": 270},
+            "confidence": 0.8,
+            "control_element_id": "E1",
+            "control_type": "radio_like",
+            "is_primary": True,
+        }
+    ]
+
+
+def test_radio_option_candidates_include_nearby_detected_control_without_ocr() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_option", "o1"),
+        _orchestrated_parse_with_option_geometry(
+            click_point_norm={"x": 0.4, "y": 0.565},
+            bbox_norm={"x": 0.36, "y": 0.55, "width": 0.08, "height": 0.03},
+            selection_control="radio",
+        ),
+        _layout_index_with_nearby_visual_control(),
+        _runtime_context(),
+    )
+
+    target = resolved["actions"][0]["target"]
+    candidate_sources = [candidate["source"] for candidate in target["click_candidates"]]
+    assert report["validation_passed"] is True
+    assert target["click_point_raw"] == {"x": 86, "y": 76}
+    assert candidate_sources[0] == "radio_control_left_bias"
+    assert "nearby_detected_control" in candidate_sources
+    nearby = next(candidate for candidate in target["click_candidates"] if candidate["source"] == "nearby_detected_control")
+    assert nearby["click_point_raw"] == {"x": 88, "y": 74}
+    assert nearby["control_element_id"] == "E_near"
 
 
 def test_invalid_option_id_generates_validation_issue() -> None:

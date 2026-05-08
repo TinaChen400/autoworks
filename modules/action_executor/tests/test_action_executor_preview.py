@@ -29,6 +29,19 @@ def _action(action_id: str = "a1", include_click_point: bool = True) -> dict:
     if include_click_point:
         target["click_point_screen"] = {"x": 160, "y": 270}
         target["click_point_raw"] = {"x": 60, "y": 70}
+        target["click_candidates"] = [
+            {
+                "source": "primary",
+                "click_point_screen": {"x": 160, "y": 270},
+                "click_point_raw": {"x": 60, "y": 70},
+                "is_primary": True,
+            },
+            {
+                "source": "nearby_detected_control",
+                "click_point_screen": {"x": 170, "y": 280},
+                "click_point_raw": {"x": 70, "y": 80},
+            },
+        ]
     return {
         "action_id": action_id,
         "skill": "click_option",
@@ -142,6 +155,10 @@ def test_allowed_click_option_produces_preview_record() -> None:
     assert record["option_id"] == "o1"
     assert record["option_text"] == "Retail Central"
     assert record["click_point_screen"] == {"x": 160, "y": 270}
+    assert [candidate["source"] for candidate in record["click_candidates"]] == [
+        "primary",
+        "nearby_detected_control",
+    ]
     assert record["real_execution"] is False
 
 

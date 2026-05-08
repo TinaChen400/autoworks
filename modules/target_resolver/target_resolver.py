@@ -12,6 +12,7 @@ from .target_resolver_validator import validate_resolved_action_plan
 
 
 RADIO_CHECKBOX_CONTROLS = {"radio", "checkbox"}
+VISUAL_CONTROL_HINTS = {"radio_like", "checkbox_like", "icon_like"}
 DEFAULT_RADIO_CONTROL_OFFSET_RATIO = 0.25
 DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM = 0.018
 DEFAULT_RADIO_CONTROL_OFFSET_MAX_NORM = 0.03
@@ -137,6 +138,96 @@ def _points_match(first: dict[str, float] | None, second: dict[str, float] | Non
     return abs(first["x"] - second["x"]) <= 0.000001 and abs(first["y"] - second["y"]) <= 0.000001
 
 
+def _candidate_from_norm(
+    source: str,
+    click_point_norm: dict[str, float] | None,
+    runtime_context: dict[str, Any],
+    confidence: float,
+    control_element_id: str = "",
+    control_type: str = "unknown",
+    is_primary: bool = False,
+) -> dict[str, Any] | None:
+    if click_point_norm is None:
+        return None
+    click_point_raw, click_point_screen = norm_to_screen(click_point_norm, runtime_context)
+    if not _inside_anchor_model_bounds(click_point_raw, click_point_screen, runtime_context):
+        return None
+    candidate = {
+        "source": source,
+        "click_point_norm": click_point_norm,
+        "click_point_raw": click_point_raw,
+        "click_point_screen": click_point_screen,
+        "confidence": round(max(0.0, min(1.0, float(confidence or 0.0))), 3),
+    }
+    if control_element_id:
+        candidate["control_element_id"] = control_element_id
+    if control_type:
+        candidate["control_type"] = control_type
+    if is_primary:
+        candidate["is_primary"] = True
+    return candidate
+
+
+def _add_candidate(candidates: list[dict[str, Any]], candidate: dict[str, Any] | None) -> None:
+    if candidate is None:
+        return
+    candidate_key = (
+        (candidate.get("click_point_raw") or {}).get("x"),
+        (candidate.get("click_point_raw") or {}).get("y"),
+    )
+    for existing in candidates:
+        existing_key = (
+            (existing.get("click_point_raw") or {}).get("x"),
+            (existing.get("click_point_raw") or {}).get("y"),
+        )
+        if existing_key == candidate_key:
+            return
+    candidates.append(candidate)
+
+
+def _nearby_visual_control_candidates(
+    option: dict[str, Any],
+    layout_index: dict[str, Any],
+    runtime_context: dict[str, Any],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    bbox = _numeric_bbox(option.get("bbox_norm"))
+    if bbox is None:
+        return []
+    target_x = bbox["x"] + min(max(bbox["width"] * 0.3, 0.0), bbox["width"])
+    target_y = bbox["y"] + (bbox["height"] * DEFAULT_RADIO_CONTROL_VERTICAL_RATIO)
+    min_x = max(0.0, bbox["x"] - max(0.035, bbox["width"] * 0.6))
+    max_x = min(1.0, bbox["x"] + bbox["width"] + max(0.02, bbox["width"] * 0.4))
+    min_y = max(0.0, bbox["y"] - max(0.035, bbox["height"] * 0.75))
+    max_y = min(1.0, bbox["y"] + bbox["height"] + max(0.02, bbox["height"] * 0.5))
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for element in layout_index.get("elements", []) or []:
+        if not isinstance(element, dict):
+            continue
+        hint = str(element.get("element_type_hint") or element.get("control_type") or "").casefold()
+        if hint not in VISUAL_CONTROL_HINTS:
+            continue
+        point = _numeric_point(element.get("click_point_norm"))
+        if point is None:
+            continue
+        if not (min_x <= point["x"] <= max_x and min_y <= point["y"] <= max_y):
+            continue
+        distance = abs(point["x"] - target_x) + abs(point["y"] - target_y)
+        confidence = float(element.get("confidence", 0.78) or 0.78)
+        candidate = _candidate_from_norm(
+            "nearby_detected_control",
+            point,
+            runtime_context,
+            confidence,
+            str(element.get("element_id", "")),
+            hint or "unknown",
+        )
+        if candidate is not None:
+            scored.append((distance, candidate))
+    scored.sort(key=lambda item: (-float(item[1].get("confidence", 0.0)), item[0]))
+    return [candidate for _distance, candidate in scored[:limit]]
+
+
 def _radio_control_point_from_option(option: dict[str, Any]) -> tuple[dict[str, float] | None, str]:
     click_point = _numeric_point(option.get("control_click_point_norm"))
     if click_point is not None:
@@ -189,6 +280,7 @@ def _metadata_for_adjusted_radio_point(
 def _resolve_from_parsed_geometry(
     option: dict[str, Any],
     runtime_context: dict[str, Any],
+    layout_index: dict[str, Any],
     associated_control: dict[str, Any] | None = None,
     radio_control_offset_ratio: float = DEFAULT_RADIO_CONTROL_OFFSET_RATIO,
     radio_control_offset_min_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM,
@@ -254,6 +346,70 @@ def _resolve_from_parsed_geometry(
     click_point_raw, click_point_screen = norm_to_screen(click_point_norm, runtime_context)
     if not _inside_anchor_model_bounds(click_point_raw, click_point_screen, runtime_context):
         return None
+    candidates: list[dict[str, Any]] = []
+    _add_candidate(
+        candidates,
+        _candidate_from_norm(
+            resolver_source,
+            click_point_norm,
+            runtime_context,
+            resolver_confidence,
+            str(extra_metadata.get("control_element_id", "")),
+            str(extra_metadata.get("control_type", _selection_control(option))),
+            is_primary=True,
+        ),
+    )
+    if _is_radio_checkbox(option):
+        for candidate in _nearby_visual_control_candidates(option, layout_index, runtime_context):
+            _add_candidate(candidates, candidate)
+        control_point, control_source = _radio_control_point_from_option(option)
+        _add_candidate(
+            candidates,
+            _candidate_from_norm(
+                control_source,
+                control_point,
+                runtime_context,
+                0.9,
+                control_type=_selection_control(option),
+            ),
+        )
+        left_bias = _radio_left_biased_point(
+            option,
+            radio_control_offset_ratio,
+            radio_control_offset_min_norm,
+            radio_control_offset_max_norm,
+            radio_control_vertical_ratio,
+        )
+        _add_candidate(
+            candidates,
+            _candidate_from_norm(
+                "radio_control_left_bias",
+                left_bias,
+                runtime_context,
+                0.82,
+                control_type=_selection_control(option),
+            ),
+        )
+    _add_candidate(
+        candidates,
+        _candidate_from_norm(
+            "parsed_option_click_point",
+            _numeric_point(option.get("click_point_norm")),
+            runtime_context,
+            0.65,
+            control_type=_selection_control(option),
+        ),
+    )
+    _add_candidate(
+        candidates,
+        _candidate_from_norm(
+            "parsed_option_bbox_center",
+            _numeric_bbox_center(option.get("bbox_norm")),
+            runtime_context,
+            0.55,
+            control_type=_selection_control(option),
+        ),
+    )
 
     return {
         "click_point_norm": click_point_norm,
@@ -261,6 +417,7 @@ def _resolve_from_parsed_geometry(
         "click_point_screen": click_point_screen,
         "resolver_confidence": resolver_confidence,
         "resolver_source": resolver_source,
+        "click_candidates": candidates,
         **extra_metadata,
     }
 
@@ -313,6 +470,7 @@ def resolve_action_plan(
             _resolve_from_parsed_geometry(
                 parsed_option,
                 runtime_context,
+                layout_index,
                 associated_control,
                 radio_control_offset_ratio,
                 radio_control_offset_min_norm,
@@ -363,6 +521,15 @@ def resolve_action_plan(
             "y": round(float(control["click_point_norm"].get("y", 0.0)), 6),
         }
         click_point_raw, click_point_screen = norm_to_screen(click_point_norm, runtime_context)
+        primary_candidate = _candidate_from_norm(
+            str(control.get("match_source") or "associated_control_geometry"),
+            click_point_norm,
+            runtime_context,
+            float(control.get("resolver_confidence", 0.0) or 0.0),
+            str(control.get("control_element_id", "")),
+            str(control.get("control_type", "unknown")),
+            is_primary=True,
+        )
 
         resolved["target"] = {
             "question_id": question_id,
@@ -374,6 +541,8 @@ def resolve_action_plan(
             "click_point_raw": click_point_raw,
             "click_point_screen": click_point_screen,
             "resolver_confidence": control.get("resolver_confidence", 0.0),
+            "resolver_source": str(control.get("match_source") or "associated_control_geometry"),
+            "click_candidates": [primary_candidate] if primary_candidate is not None else [],
         }
         actions.append(resolved)
 
