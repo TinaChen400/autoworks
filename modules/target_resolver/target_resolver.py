@@ -15,6 +15,7 @@ RADIO_CHECKBOX_CONTROLS = {"radio", "checkbox"}
 DEFAULT_RADIO_CONTROL_OFFSET_RATIO = 0.25
 DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM = 0.018
 DEFAULT_RADIO_CONTROL_OFFSET_MAX_NORM = 0.03
+DEFAULT_RADIO_CONTROL_VERTICAL_RATIO = 0.2
 
 
 def _numeric_point(point: Any) -> dict[str, float] | None:
@@ -151,16 +152,18 @@ def _radio_left_biased_point(
     radio_control_offset_ratio: float = DEFAULT_RADIO_CONTROL_OFFSET_RATIO,
     radio_control_offset_min_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM,
     radio_control_offset_max_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MAX_NORM,
+    radio_control_vertical_ratio: float = DEFAULT_RADIO_CONTROL_VERTICAL_RATIO,
 ) -> dict[str, float] | None:
     bbox = _numeric_bbox(option.get("bbox_norm"))
     if bbox is None:
         return None
     ratio_offset = bbox["width"] * max(0.0, radio_control_offset_ratio)
     offset = min(max(ratio_offset, radio_control_offset_min_norm), radio_control_offset_max_norm)
+    y_ratio = min(max(radio_control_vertical_ratio, 0.0), 1.0)
     return _numeric_point(
         {
             "x": bbox["x"] + offset,
-            "y": bbox["y"] + (bbox["height"] / 2.0),
+            "y": bbox["y"] + (bbox["height"] * y_ratio),
         }
     )
 
@@ -190,6 +193,7 @@ def _resolve_from_parsed_geometry(
     radio_control_offset_ratio: float = DEFAULT_RADIO_CONTROL_OFFSET_RATIO,
     radio_control_offset_min_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM,
     radio_control_offset_max_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MAX_NORM,
+    radio_control_vertical_ratio: float = DEFAULT_RADIO_CONTROL_VERTICAL_RATIO,
 ) -> dict[str, Any] | None:
     click_point_norm = _numeric_point(option.get("click_point_norm"))
     resolver_confidence = 0.85
@@ -216,12 +220,17 @@ def _resolve_from_parsed_geometry(
                 click_point_norm = control_point
                 resolver_confidence = float(associated_control.get("resolver_confidence", 0.8) or 0.8)
                 resolver_source = str(associated_control.get("match_source") or "associated_control_geometry")
+                extra_metadata = {
+                    "control_element_id": str(associated_control.get("control_element_id", "")),
+                    "control_type": str(associated_control.get("control_type", "unknown")),
+                }
         elif click_point_was_inferred:
             adjusted = _radio_left_biased_point(
                 option,
                 radio_control_offset_ratio,
                 radio_control_offset_min_norm,
                 radio_control_offset_max_norm,
+                radio_control_vertical_ratio,
             )
             if adjusted is not None:
                 click_point_norm = adjusted
@@ -273,6 +282,7 @@ def resolve_action_plan(
     radio_control_offset_ratio: float = DEFAULT_RADIO_CONTROL_OFFSET_RATIO,
     radio_control_offset_min_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM,
     radio_control_offset_max_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MAX_NORM,
+    radio_control_vertical_ratio: float = DEFAULT_RADIO_CONTROL_VERTICAL_RATIO,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     _ = source
     actions: list[dict[str, Any]] = []
@@ -307,6 +317,7 @@ def resolve_action_plan(
                 radio_control_offset_ratio,
                 radio_control_offset_min_norm,
                 radio_control_offset_max_norm,
+                radio_control_vertical_ratio,
             )
             if parsed_option is not None
             else None
@@ -385,6 +396,7 @@ def run(
     radio_control_offset_ratio: float = DEFAULT_RADIO_CONTROL_OFFSET_RATIO,
     radio_control_offset_min_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM,
     radio_control_offset_max_norm: float = DEFAULT_RADIO_CONTROL_OFFSET_MAX_NORM,
+    radio_control_vertical_ratio: float = DEFAULT_RADIO_CONTROL_VERTICAL_RATIO,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     action_plan, orchestrated_parse, layout_index, runtime_context = resolved_action_store.load_inputs()
     plan, report = resolve_action_plan(
@@ -396,6 +408,7 @@ def run(
         radio_control_offset_ratio=radio_control_offset_ratio,
         radio_control_offset_min_norm=radio_control_offset_min_norm,
         radio_control_offset_max_norm=radio_control_offset_max_norm,
+        radio_control_vertical_ratio=radio_control_vertical_ratio,
     )
     resolved_action_store.save_resolved_action_plan(plan)
     resolved_action_store.save_report(report)
@@ -408,12 +421,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--radio-control-offset-ratio", type=float, default=DEFAULT_RADIO_CONTROL_OFFSET_RATIO)
     parser.add_argument("--radio-control-offset-min-norm", type=float, default=DEFAULT_RADIO_CONTROL_OFFSET_MIN_NORM)
     parser.add_argument("--radio-control-offset-max-norm", type=float, default=DEFAULT_RADIO_CONTROL_OFFSET_MAX_NORM)
+    parser.add_argument("--radio-control-vertical-ratio", type=float, default=DEFAULT_RADIO_CONTROL_VERTICAL_RATIO)
     args = parser.parse_args(argv)
     plan, report = run(
         args.source,
         args.radio_control_offset_ratio,
         args.radio_control_offset_min_norm,
         args.radio_control_offset_max_norm,
+        args.radio_control_vertical_ratio,
     )
     print(
         "Saved runtime_state/latest_resolved_action_plan.json "

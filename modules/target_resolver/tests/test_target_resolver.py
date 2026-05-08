@@ -214,11 +214,11 @@ def test_radio_option_with_inferred_bbox_center_uses_left_biased_control_point()
 
     target = resolved["actions"][0]["target"]
     assert report["validation_passed"] is True
-    assert target["click_point_norm"] == {"x": 0.38, "y": 0.565}
+    assert target["click_point_norm"] == {"x": 0.38, "y": 0.556}
     assert target["click_point_raw"] == {"x": 86, "y": 76}
     assert target["resolver_source"] == "radio_control_left_bias"
     assert target["original_click_point_norm"] == {"x": 0.4, "y": 0.565}
-    assert target["adjusted_click_point_norm"] == {"x": 0.38, "y": 0.565}
+    assert target["adjusted_click_point_norm"] == {"x": 0.38, "y": 0.556}
     assert target["selection_control"] == "radio"
     assert target["adjustment_reason"] == "parsed click point was inferred from option bbox center"
 
@@ -237,7 +237,7 @@ def test_checkbox_option_with_inferred_bbox_center_uses_left_biased_control_poin
 
     target = resolved["actions"][0]["target"]
     assert report["validation_passed"] is True
-    assert target["click_point_norm"] == {"x": 0.38, "y": 0.565}
+    assert target["click_point_norm"] == {"x": 0.38, "y": 0.556}
     assert target["resolver_source"] == "radio_control_left_bias"
     assert target["selection_control"] == "checkbox"
 
@@ -300,7 +300,7 @@ def test_click_option_resolution() -> None:
     assert target["click_point_raw"] == {"x": 60, "y": 70}
     assert target["click_point_screen"] == {"x": 160, "y": 270}
     assert target["resolver_confidence"] == 0.8
-    assert "resolver_source" not in target
+    assert target["resolver_source"] == "possible_option_label"
 
 
 def test_invalid_option_id_generates_validation_issue() -> None:
