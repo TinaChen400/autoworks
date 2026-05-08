@@ -56,6 +56,42 @@ Result:
 61 passed in 0.91s
 ```
 
+## OCR-Guided Control Validation
+
+Manual validation completed on `feature/ocr-guided-control-detection`.
+
+Scenario:
+
+- New single-choice page.
+- Human review selected `q1 -> a3`.
+- Perception was run with `--ocr rapidocr`.
+
+Resolved OCR/control path:
+
+- OCR option text: `T24`
+- Detected control: `E93`
+- `resolver_source = possible_option_label`
+- `control_type = checkbox_like`
+- `click_point_raw = (647,665)`
+- `click_point_screen = (747,745)`
+
+Real executor result:
+
+- `option_id = a3`
+- `status = clicked`
+- `actual_cursor_position = (747,745)`
+
+Manual visual result:
+
+- Click landed in the correct target area.
+- Page selected the intended option.
+
+Regression tests after OCR-guided control detection:
+
+```text
+90 passed in 0.93s
+```
+
 ## Follow-Up
 
 The current radio y adjustment is a fallback, not the long-term targeting strategy. The next improvement should make target resolution generate multiple click candidates from visual control detection, then add closed-loop execution:
