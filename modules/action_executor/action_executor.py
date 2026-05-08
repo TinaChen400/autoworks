@@ -103,7 +103,11 @@ def run(
             for record in action_records:
                 point = record["click_point_screen"]
                 try:
-                    mouse_api.click_screen_point(point["x"], point["y"], pause_ms=pause_ms)
+                    actual_position = mouse_api.click_screen_point(
+                        point["x"],
+                        point["y"],
+                        pause_ms=pause_ms,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     record["status"] = "failed"
                     validation.setdefault("errors", []).append(
@@ -114,6 +118,8 @@ def run(
                         }
                     )
                     continue
+                if isinstance(actual_position, dict):
+                    record["actual_cursor_position"] = actual_position
                 record["status"] = "clicked"
                 executed_action_count += 1
 

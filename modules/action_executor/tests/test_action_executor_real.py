@@ -15,8 +15,9 @@ class FakeMouse:
     def __init__(self) -> None:
         self.calls: list[tuple[int, int, int]] = []
 
-    def click_screen_point(self, x: int, y: int, pause_ms: int = 120) -> None:
+    def click_screen_point(self, x: int, y: int, pause_ms: int = 120) -> dict[str, int]:
         self.calls.append((x, y, pause_ms))
+        return {"x": x, "y": y}
 
 
 def _action(
@@ -125,6 +126,7 @@ def test_allowed_click_option_creates_executable_records(tmp_path: Path) -> None
     assert report["execution_attempted"] is True
     assert report["executed_action_count"] == 1
     assert report["action_records"][0]["click_point_screen"] == {"x": 160, "y": 270}
+    assert report["action_records"][0]["actual_cursor_position"] == {"x": 160, "y": 270}
     assert report["action_records"][0]["status"] == "clicked"
     assert (runtime / "latest_action_executor_run.json").exists()
     assert (runtime / "latest_action_executor_report.json").exists()
