@@ -25,6 +25,7 @@ from modules.perception_indexer.grouping import (
 )
 from modules.perception_indexer.index_store import read_json, write_json
 from modules.perception_indexer.indexer import build_layout_index
+from modules.perception_indexer.element_detector import detect_text_left_controls
 from modules.perception_indexer.ocr_layer import run_ocr
 from modules.perception_indexer.schema import (
     BBox,
@@ -351,6 +352,32 @@ def test_element_label_assignment_prefers_field_label_over_section_title() -> No
     classify_text_blocks(text_blocks)
     associate_text([element], text_blocks, lambda: "REL1")
     assert element.label_text == "Email"
+
+
+def test_ocr_guided_control_detection_finds_text_left_checkbox() -> None:
+    image = Image.new("RGB", (220, 220), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((70, 90, 84, 104), outline="black", width=2)
+    ids = IdGenerator()
+    region = Region("R1", "model_input_region", {"x": 0, "y": 0, "width": 220, "height": 220}, {})
+    text = TextBlock(
+        "T1",
+        "This is essentially the same",
+        {"x": 100, "y": 88, "width": 95, "height": 20},
+        {},
+        0.95,
+        "test",
+    )
+
+    controls = detect_text_left_controls(image, [region], [text], [], ids)
+    relationships = associate_text(controls, [text], lambda: "REL1")
+
+    assert len(controls) == 1
+    assert controls[0].element_type_hint == "checkbox_like"
+    assert controls[0].metadata["source"] == "ocr_guided_text_left_control"
+    assert relationships[0].relationship_type == "possible_option_label"
+    assert relationships[0].source_id == "T1"
+    assert relationships[0].target_id == controls[0].element_id
 
 
 def test_region_relationships_do_not_create_cycles() -> None:

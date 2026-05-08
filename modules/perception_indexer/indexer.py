@@ -7,7 +7,7 @@ from typing import Any
 from modules.perception_indexer.annotator import save_annotated_crop, save_annotated_overview
 from modules.perception_indexer.card_detector import detect_card_regions, detect_viewport_regions
 from modules.perception_indexer.crop_quality import compute_crop_quality, expand_and_clamp_crop
-from modules.perception_indexer.element_detector import detect_elements
+from modules.perception_indexer.element_detector import detect_elements, detect_text_left_controls
 from modules.perception_indexer.detectors.runner import (
     detector_scores,
     implemented_detectors,
@@ -87,6 +87,15 @@ def build_layout_index(ocr_backend: str | None = None) -> dict[str, Any]:
     )
     removed_false_card_candidates = removed_false_card_candidates + rejected_text_card_candidates
     regions.extend(card_regions)
+    ocr_guided_controls = detect_text_left_controls(
+        image=image,
+        regions=regions,
+        text_blocks=text_blocks,
+        existing_elements=elements,
+        ids=ids,
+    )
+    if ocr_guided_controls:
+        elements.extend(ocr_guided_controls)
 
     assign_elements_to_smallest_regions(regions, elements)
     attach_text_to_regions(regions, text_blocks)

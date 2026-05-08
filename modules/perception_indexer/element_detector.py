@@ -9,12 +9,17 @@ from modules.perception_indexer.schema import (
     Element,
     IdGenerator,
     Region,
+    TextBlock,
+    bbox_from_dict,
     box_contains,
     boxes_intersect,
     click_point_for_bbox,
     normalize_bbox,
     normalize_point,
 )
+
+
+TEXT_LEFT_CONTROL_SOURCE = "ocr_guided_text_left_control"
 
 
 def _edge_components(image: Image.Image, work_area: BBox) -> list[BBox]:
@@ -146,6 +151,134 @@ def detect_elements(
             )
         )
     return elements[:300]
+
+
+def detect_text_left_controls(
+    image: Image.Image,
+    regions: list[Region],
+    text_blocks: list[TextBlock],
+    existing_elements: list[Element],
+    ids: IdGenerator,
+    max_search_left_px: int = 96,
+) -> list[Element]:
+    elements: list[Element] = []
+    for text_block in text_blocks:
+        text_box = bbox_from_dict(text_block.bbox_raw)
+        if not _eligible_text_left_control_label(text_box, image.width, image.height):
+            continue
+        search_box = _text_left_search_box(text_box, image.width, image.height, max_search_left_px)
+        if search_box.width < 8 or search_box.height < 8:
+            continue
+        for component in _merge_control_fragments(_edge_components(image, search_box)):
+            control_box = _control_bbox_from_component(component)
+            if control_box is None:
+                continue
+            click_raw = click_point_for_bbox(control_box)
+            existing = _nearby_existing_control(click_raw, existing_elements + elements)
+            if existing is not None:
+                if existing.element_type_hint in {"icon_like", "unknown"}:
+                    existing.element_type_hint = "checkbox_like"
+                    existing.confidence = max(existing.confidence, 0.66)
+                    existing.metadata["source"] = TEXT_LEFT_CONTROL_SOURCE
+                    existing.metadata["source_text_id"] = text_block.text_id
+                continue
+            region_id = _best_region_id(control_box, regions)
+            elements.append(
+                Element(
+                    element_id=ids.next_element(),
+                    region_id=region_id,
+                    element_type_hint="checkbox_like",
+                    bbox_raw=control_box.to_dict(),
+                    bbox_norm=normalize_bbox(control_box, image.width, image.height),
+                    click_point_raw=click_raw,
+                    click_point_norm=normalize_point(click_raw, image.width, image.height),
+                    confidence=0.68,
+                    metadata={
+                        "source": TEXT_LEFT_CONTROL_SOURCE,
+                        "source_text_id": text_block.text_id,
+                    },
+                )
+            )
+    return elements
+
+
+def _eligible_text_left_control_label(text_box: BBox, image_width: int, image_height: int) -> bool:
+    if text_box.width < max(70, int(image_width * 0.03)) or text_box.height < 8:
+        return False
+    center_y = text_box.y + text_box.height / 2
+    if center_y < image_height * 0.20 or center_y > image_height * 0.92:
+        return False
+    return True
+
+
+def _text_left_search_box(
+    text_box: BBox,
+    image_width: int,
+    image_height: int,
+    max_search_left_px: int,
+) -> BBox:
+    center_y = text_box.y + text_box.height // 2
+    vertical_radius = max(18, int(text_box.height * 1.2))
+    left = max(0, text_box.x - max_search_left_px)
+    right = max(left, min(image_width, text_box.x - 4))
+    top = max(0, center_y - vertical_radius)
+    bottom = min(image_height, center_y + vertical_radius)
+    return BBox(left, top, right - left, bottom - top)
+
+
+def _control_bbox_from_component(component: BBox) -> BBox | None:
+    if not (8 <= component.width <= 28 and 8 <= component.height <= 28):
+        return None
+    aspect = component.width / max(1, component.height)
+    if not 0.65 <= aspect <= 1.45:
+        return None
+    return component
+
+
+def _merge_control_fragments(components: list[BBox]) -> list[BBox]:
+    merged: list[BBox] = []
+    for component in sorted(components, key=lambda item: (item.y, item.x)):
+        merged_into_existing = False
+        for index, existing in enumerate(merged):
+            if _control_fragments_close(existing, component):
+                left = min(existing.x, component.x)
+                top = min(existing.y, component.y)
+                right = max(existing.right, component.right)
+                bottom = max(existing.bottom, component.bottom)
+                merged[index] = BBox(left, top, right - left, bottom - top)
+                merged_into_existing = True
+                break
+        if not merged_into_existing:
+            merged.append(component)
+    return merged
+
+
+def _control_fragments_close(first: BBox, second: BBox) -> bool:
+    left = min(first.x, second.x)
+    top = min(first.y, second.y)
+    right = max(first.right, second.right)
+    bottom = max(first.bottom, second.bottom)
+    if right - left > 32 or bottom - top > 32:
+        return False
+    horizontal_gap = max(0, max(first.x - second.right, second.x - first.right))
+    vertical_gap = max(0, max(first.y - second.bottom, second.y - first.bottom))
+    return horizontal_gap <= 4 and vertical_gap <= 4
+
+
+def _nearby_existing_control(point: dict[str, int], elements: list[Element]) -> Element | None:
+    for element in elements:
+        if element.element_type_hint not in {"checkbox_like", "radio_like", "icon_like", "unknown"}:
+            continue
+        existing = element.click_point_raw
+        if not isinstance(existing, dict):
+            continue
+        try:
+            distance = abs(int(existing["x"]) - point["x"]) + abs(int(existing["y"]) - point["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if distance <= 10:
+            return element
+    return None
 
 
 def _best_region_id(bbox: BBox, regions: list[Region]) -> str:
