@@ -681,6 +681,7 @@ def run_window_capture(
 
 def run_existing_capture_check(runtime_state_dir: Path, *, run_started_at: datetime) -> dict[str, Any]:
     try:
+        existing_capture_provenance = read_capture_provenance(runtime_state_dir)
         provenance = validate_existing_capture(runtime_state_dir / "latest_capture.png")
     except Exception as exc:
         return {
@@ -696,6 +697,22 @@ def run_existing_capture_check(runtime_state_dir: Path, *, run_started_at: datet
         }
 
     provenance_path = runtime_state_dir / "latest_capture_provenance.json"
+    if existing_capture_provenance_references_capture(
+        existing_capture_provenance,
+        runtime_state_dir / "latest_capture.png",
+    ):
+        return {
+            "status": "success",
+            "summary": "validated runtime_state/latest_capture.png",
+            "output_paths": {
+                "screenshot": str(runtime_state_dir / "latest_capture.png"),
+                "provenance": str(provenance_path),
+            },
+            "warnings": [],
+            "errors": [],
+            "metadata": existing_capture_provenance,
+        }
+
     provenance_path.write_text(
         json.dumps(provenance, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -711,6 +728,20 @@ def run_existing_capture_check(runtime_state_dir: Path, *, run_started_at: datet
         "errors": [],
         "metadata": provenance,
     }
+
+
+def existing_capture_provenance_references_capture(
+    provenance: dict[str, Any],
+    capture_path: Path,
+) -> bool:
+    if not provenance:
+        return False
+    if provenance.get("capture_source") not in {"locked_target", "fixture"}:
+        return False
+    screenshot_path = str(provenance.get("screenshot_path") or provenance.get("capture_path") or "")
+    if not screenshot_path:
+        return False
+    return Path(screenshot_path).resolve(strict=False) == capture_path.resolve(strict=False)
 
 
 def validate_existing_capture(path: Path) -> dict[str, Any]:
@@ -1076,17 +1107,20 @@ def capture_provenance_allows_context(
 ) -> tuple[bool, str]:
     capture_path = runtime_state_dir / "latest_capture.png"
     provenance_path = runtime_state_dir / "latest_capture_provenance.json"
-    if missing_outputs({"provenance": provenance_path}, min_mtime=run_started_at):
-        return False, "latest_capture_provenance.json is missing or stale for this run"
     if not capture_path.exists():
         return False, "latest_capture.png is missing or stale for this run"
     provenance = read_capture_provenance(runtime_state_dir)
+    if provenance.get("capture_source") != "existing_capture" and missing_outputs(
+        {"screenshot": capture_path},
+        min_mtime=run_started_at,
+    ):
+        return False, "latest_capture.png is missing or stale for this run"
+    if missing_outputs({"provenance": provenance_path}, min_mtime=run_started_at):
+        return False, "latest_capture_provenance.json is missing or stale for this run"
     if provenance.get("screenshot_path") != str(capture_path):
         return False, "capture provenance does not reference runtime_state/latest_capture.png"
     if provenance.get("capture_source") == "existing_capture":
         return True, ""
-    if missing_outputs({"screenshot": capture_path}, min_mtime=run_started_at):
-        return False, "latest_capture.png is missing or stale for this run"
     if provenance.get("target_locked") is True and provenance.get("capture_source") == "locked_target":
         return True, ""
     if allow_fixture and provenance.get("capture_source") == "fixture":

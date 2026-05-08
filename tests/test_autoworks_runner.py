@@ -638,6 +638,8 @@ def test_perception_indexer_failure_blocks_parse_orchestrator(monkeypatch, tmp_p
             return fake_capture(tmp_path)
         if step.name == "existing_capture_check":
             return write_existing_capture_check_result(tmp_path)
+        if step.name == "context_mapper":
+            write_context(tmp_path)
         if step.name == "perception_indexer":
             return {
                 "status": "failed",
@@ -676,6 +678,10 @@ def test_perception_indexer_success_allows_parse_orchestrator_to_run(monkeypatch
             return fake_capture(tmp_path)
         if step.name == "existing_capture_check":
             return write_existing_capture_check_result(tmp_path)
+        if step.name == "context_mapper":
+            write_context(tmp_path)
+        if step.name == "perception_indexer":
+            write_perception(tmp_path)
         if step.name == "parse_orchestrator":
             return {
                 "status": "blocked",
@@ -717,6 +723,9 @@ def test_stale_perception_outputs_are_ignored(monkeypatch, tmp_path: Path) -> No
         os.utime(path, (old_time, old_time))
 
     def fake_run_python_module(module_name, args, expected_outputs, **kwargs):
+        if "context_mapper" in module_name:
+            write_context(tmp_path)
+            return successful_module_result(module_name, expected_outputs)
         for path in expected_outputs.values():
             if not path.exists():
                 path.write_text("{}", encoding="utf-8")
