@@ -4,11 +4,15 @@ import json
 import os
 import sys
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
+from typing import Any
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from PIL import Image
 
 from modules.window_capture.capture import (
     ALLOWED_SCALES,
@@ -40,6 +44,75 @@ from modules.window_capture.window_locator import WindowInfo, list_visible_windo
 
 
 LOCK_INTERVAL_MS = 500
+CAPTURE_PROVENANCE_PATH = PROJECT_ROOT / "runtime_state" / "latest_capture_provenance.json"
+
+
+def _placement_to_dict(placement: WindowPlacement) -> dict[str, int]:
+    return {
+        "left": placement.left,
+        "top": placement.top,
+        "width": placement.width,
+        "height": placement.height,
+    }
+
+
+def _image_hash(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_capture_provenance(
+    *,
+    output_path: Path,
+    capture_target: AnchorFrame,
+    locked_target: WindowPlacement | None,
+    target_window_handle: int | None,
+    target_window_title: str,
+    dpi_scale: float | None,
+) -> dict[str, Any]:
+    with Image.open(output_path) as image:
+        image_width, image_height = image.size
+
+    locked_region = _placement_to_dict(locked_target) if locked_target is not None else {}
+    bbox = locked_region or {
+        "left": int(capture_target["x"]),
+        "top": int(capture_target["y"]),
+        "width": int(capture_target["width"]),
+        "height": int(capture_target["height"]),
+    }
+    screenshot_mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat()
+    target_locked = locked_target is not None
+    return {
+        "capture_source": "locked_target" if target_locked else "anchor_frame",
+        "target_locked": target_locked,
+        "target_window_title": target_window_title if target_locked else "",
+        "target_window_handle": target_window_handle if target_locked else None,
+        "locked_region": locked_region,
+        "bbox": bbox,
+        "dpi_scale": dpi_scale,
+        "capture_path": str(output_path),
+        "screenshot_path": str(output_path),
+        "capture_mtime": screenshot_mtime,
+        "screenshot_mtime": screenshot_mtime,
+        "image_width": image_width,
+        "image_height": image_height,
+        "image_hash": _image_hash(output_path),
+        "created_at": datetime.now().isoformat(),
+    }
+
+
+def write_capture_provenance(
+    provenance: dict[str, Any],
+    path: Path = CAPTURE_PROVENANCE_PATH,
+) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 class WindowCapturePanel(tk.Tk):
@@ -264,6 +337,12 @@ class WindowCapturePanel(tk.Tk):
         self._debug(message)
         return message
 
+    def _target_title(self, hwnd: int | None) -> str:
+        if hwnd is None:
+            return ""
+        selected = self._window_by_hwnd(hwnd)
+        return selected.title if selected is not None else ""
+
     def _require_selected_hwnd(self) -> int | None:
         if self.selected_hwnd is None:
             messagebox.showwarning("No target selected", "Select one target window first.")
@@ -360,7 +439,22 @@ class WindowCapturePanel(tk.Tk):
 
         output_path = PROJECT_ROOT / "runtime_state" / "latest_capture.png"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        capture_anchor_frame(capture_target or self.anchor, output_path=output_path)
+        active_capture_target = capture_target or resolve_anchor_frame(self.anchor)
+        capture_anchor_frame(active_capture_target, output_path=output_path)
+
+        provenance = build_capture_provenance(
+            output_path=output_path,
+            capture_target=active_capture_target,
+            locked_target=self.locked_target if self.locked_hwnd is not None else None,
+            target_window_handle=self.locked_hwnd,
+            target_window_title=self._target_title(self.locked_hwnd),
+            dpi_scale=float(self.anchor.get("scale", 0.0) or 0.0),
+        )
+        write_capture_provenance(provenance)
+        self._debug(
+            "capture provenance refreshed "
+            f"image_size={provenance['image_width']}x{provenance['image_height']}"
+        )
 
         if self.locked_hwnd is not None and self.locked_target is not None:
             window_after = None
