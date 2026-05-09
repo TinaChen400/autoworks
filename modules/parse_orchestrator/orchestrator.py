@@ -10,6 +10,7 @@ from modules.parse_orchestrator.input_loader import (
     load_runtime_context,
 )
 from modules.parse_orchestrator.metrics import build_metrics
+from modules.parse_orchestrator.ollama_evidence_parser import run_ollama_evidence_parse
 from modules.parse_orchestrator.parse_plan_store import (
     ORCHESTRATED_PARSE_PATH,
     ORCHESTRATOR_REPORT_PATH,
@@ -94,15 +95,21 @@ def run_orchestrated_parse(
     plan_data = plan.to_dict()
     save_parse_plan(plan_data)
 
-    vision_result = run_vision_parser(plan_data)
+    if plan_data.get("selected_mode") == "ollama":
+        vision_result = run_ollama_evidence_parse(plan_data, layout_index, runtime_context, config)
+    else:
+        vision_result = run_vision_parser(plan_data)
     fallback_used = False
     fallback_reason = ""
     fallback_warnings: list[str] = []
     model_calls_count = vision_result.model_calls_count
+    initial_error = vision_result.error
     if (
-        plan_data.get("selected_mode") != "doubao"
+        plan_data.get("selected_mode") not in {"doubao", "ollama"}
         and not _parsed_page_is_actionable(vision_result.parsed_page)
     ):
+        if initial_error:
+            fallback_warnings.append(initial_error)
         fallback_plan = _fallback_plan_from_overview(plan_data)
         fallback_result = run_vision_parser(fallback_plan)
         fallback_used = True
@@ -184,7 +191,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Coordinate perception_indexer and vision_parser."
     )
-    parser.add_argument("--mode", choices=["fake", "doubao"], default=None)
+    parser.add_argument("--mode", choices=["fake", "doubao", "ollama"], default=None)
     parser.add_argument("--parser-type", default="auto")
     parser.add_argument("--output-level", choices=["light", "standard"], default=None)
     parser.add_argument("--max-model-calls", type=int, default=None)

@@ -1307,7 +1307,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="preview",
         help="Only click-once can reach real action execution.",
     )
-    parser.add_argument("--parser-mode", choices=["fake", "doubao"], default="doubao")
+    parser.add_argument("--parser-mode", choices=["fake", "doubao", "ollama"], default="doubao")
     parser.add_argument("--output-level", choices=["light", "standard"], default="standard")
     parser.add_argument("--max-model-calls", type=int, default=3)
     parser.add_argument(

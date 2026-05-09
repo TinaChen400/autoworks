@@ -67,7 +67,7 @@ def select_strategy(
     selected_mode = mode or str(config.get("default_mode", "fake"))
     selected_output_level = output_level or config.get("output_level")
     if selected_output_level is None:
-        selected_output_level = "light" if selected_mode == "doubao" else "standard"
+        selected_output_level = "light" if selected_mode in {"doubao", "ollama"} else "standard"
     selected_output_level = str(selected_output_level)
     if selected_output_level not in {"light", "standard"}:
         selected_output_level = "standard"

@@ -7,6 +7,10 @@ import pytest
 from PIL import Image
 
 from modules.parse_orchestrator.input_loader import load_layout_index
+from modules.parse_orchestrator.ollama_evidence_parser import (
+    build_evidence_payload,
+    run_ollama_evidence_parse,
+)
 from modules.parse_orchestrator.metrics import build_metrics
 from modules.parse_orchestrator.orchestrator import run_orchestrated_parse
 from modules.parse_orchestrator.strategy_selector import select_strategy
@@ -87,6 +91,42 @@ def _config() -> dict:
             "scene_scan",
         ],
     }
+
+
+def _layout_with_option_evidence(tmp_path: Path) -> dict:
+    layout = _layout(tmp_path)
+    layout["text_blocks"] = [
+        {
+            "text_id": "T1",
+            "text": "Compared to what already exists?",
+            "bbox_norm": {"x": 0.1, "y": 0.2, "width": 0.5, "height": 0.04},
+        },
+        {
+            "text_id": "T2",
+            "text": "This is essentially the same as what already exists",
+            "bbox_norm": {"x": 0.2, "y": 0.4, "width": 0.5, "height": 0.04},
+            "associated_element_id": "E2",
+            "associated_region_id": "R9",
+        },
+    ]
+    layout["elements"] = [
+        {
+            "element_id": "E2",
+            "region_id": "R9",
+            "element_type_hint": "checkbox_like",
+            "click_point_norm": {"x": 0.18, "y": 0.42},
+        }
+    ]
+    layout["relationships"] = [
+        {
+            "relationship_id": "REL1",
+            "relationship_type": "possible_option_label",
+            "source_id": "T2",
+            "target_id": "E2",
+            "confidence": 0.7,
+        }
+    ]
+    return layout
 
 
 def test_load_layout_index_fixture() -> None:
@@ -227,6 +267,172 @@ def test_select_strategy_accepts_fake_output_level_config(tmp_path: Path) -> Non
 
     assert plan.selected_mode == "fake"
     assert plan.selected_output_level == "light"
+
+
+def test_ollama_evidence_payload_keeps_text_control_relationships(tmp_path: Path) -> None:
+    evidence = build_evidence_payload(
+        _layout_with_option_evidence(tmp_path),
+        _runtime_context(tmp_path),
+        _config(),
+        {"selected_region_ids": ["R9", "R10"]},
+    )
+
+    assert evidence["option_candidates"] == [
+        {
+            "text_id": "T2",
+            "text": "This is essentially the same as what already exists",
+            "control_element_id": "E2",
+            "control_type": "checkbox_like",
+            "relationship_type": "possible_option_label",
+            "confidence": 0.7,
+            "text_bbox_norm": {"x": 0.2, "y": 0.4, "width": 0.5, "height": 0.04},
+            "control_click_point_norm": {"x": 0.18, "y": 0.42},
+        }
+    ]
+
+
+def test_ollama_evidence_parse_returns_grounded_parsed_page(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_call_ollama(**_kwargs: object) -> str:
+        return json.dumps(
+            {
+                "page_type": "questionnaire",
+                "question_type": "single_choice",
+                "question_text_ids": ["T1"],
+                "option_text_ids": ["T2"],
+                "confidence": 0.9,
+                "uncertainties": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.ollama_evidence_parser.call_ollama",
+        fake_call_ollama,
+    )
+
+    result = run_ollama_evidence_parse(
+        {"task_id": "test_task", "selected_parser_type": "survey"},
+        _layout_with_option_evidence(tmp_path),
+        _runtime_context(tmp_path),
+        _config(),
+    )
+
+    assert result.validation_passed is True
+    assert result.model_calls_count == 1
+    assert result.parsed_page["metadata"]["source"] == "ollama_evidence_parse"
+    assert result.parsed_page["questions"][0]["answer_options"][0]["control_element_id"] == "E2"
+
+
+def test_orchestrator_uses_ollama_evidence_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_context = _runtime_context(tmp_path)
+    layout = _layout_with_option_evidence(tmp_path)
+    captured = {}
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.load_runtime_context",
+        lambda: runtime_context,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_layout_index", lambda: layout)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_config", _config)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_plan", lambda _p: None)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_metrics", lambda _m: None)
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.save_orchestrated_parse",
+        lambda _p: None,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_report", lambda _r: None)
+
+    def fake_run_ollama(plan: dict, layout_index: dict, runtime_context: dict, config: dict) -> object:
+        from modules.parse_orchestrator.ollama_evidence_parser import OllamaEvidenceResult
+
+        captured["mode"] = plan["selected_mode"]
+        return OllamaEvidenceResult(
+            parsed_page={
+                "page": {"page_type": "questionnaire", "confidence": 0.9},
+                "questions": [
+                    {
+                        "question_id": "q1",
+                        "question_type": "single_choice",
+                        "question_stem": {"text": "Question?"},
+                        "answer_options": [{"option_id": "T2", "text": "Option"}],
+                    }
+                ],
+            },
+            validation_report={"validation_passed": True},
+            model_calls_count=1,
+            validation_passed=True,
+        )
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.run_ollama_evidence_parse",
+        fake_run_ollama,
+    )
+
+    report = run_orchestrated_parse(mode="ollama")
+
+    assert captured["mode"] == "ollama"
+    assert report["model_calls_count"] == 1
+    assert report["validation_passed"] is True
+    assert report["requires_human_review"] is False
+
+
+def test_orchestrator_does_not_doubao_fallback_after_ollama_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_context = _runtime_context(tmp_path)
+    layout = _layout_with_option_evidence(tmp_path)
+    called_vision = False
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.load_runtime_context",
+        lambda: runtime_context,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_layout_index", lambda: layout)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_config", _config)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_plan", lambda _p: None)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_metrics", lambda _m: None)
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.save_orchestrated_parse",
+        lambda _p: None,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_report", lambda _r: None)
+
+    def fake_run_ollama(*_args: object, **_kwargs: object) -> object:
+        from modules.parse_orchestrator.ollama_evidence_parser import OllamaEvidenceResult
+
+        return OllamaEvidenceResult(
+            parsed_page={"page": {"page_type": "unknown", "confidence": 0.0}, "questions": []},
+            validation_report={"validation_passed": False},
+            model_calls_count=1,
+            validation_passed=False,
+            error="empty ollama parse",
+        )
+
+    def fake_run_vision_parser(_plan: dict) -> object:
+        nonlocal called_vision
+        called_vision = True
+        raise AssertionError("Ollama mode should not silently fallback to Doubao.")
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.run_ollama_evidence_parse",
+        fake_run_ollama,
+    )
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.run_vision_parser",
+        fake_run_vision_parser,
+    )
+
+    report = run_orchestrated_parse(mode="ollama")
+
+    assert called_vision is False
+    assert report["model_calls_count"] == 1
+    assert report["requires_human_review"] is True
 
 
 def test_vision_runner_warns_multi_region_mvp(monkeypatch: pytest.MonkeyPatch) -> None:

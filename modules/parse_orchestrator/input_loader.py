@@ -20,6 +20,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "fallback_to_full_screenshot": True,
     "safe_crop_required_for_crop_only_parse": True,
     "minimum_detector_score_for_direct_parse": 0.5,
+    "ollama_evidence_parse": {
+        "model": "qwen2.5:14b",
+        "endpoint": "http://127.0.0.1:11434/api/generate",
+        "timeout_seconds": 90,
+        "num_predict": 768,
+    },
+    "ollama_evidence_max_text_blocks": 90,
     "allowed_parser_types": [
         "form",
         "survey",
