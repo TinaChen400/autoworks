@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -88,9 +89,11 @@ def _candidate_point(candidate: dict[str, Any]) -> dict[str, int] | None:
 
 def _capture_after_click(capture_api: Any, runtime: Path) -> tuple[Path, dict[str, Any]]:
     if capture_api is None:
-        from modules.window_capture import target_lock
+        from modules.action_executor import capture_after_click
 
-        capture_api = target_lock
+        return capture_after_click.capture_after_click(runtime_state_dir=runtime)
+    if hasattr(capture_api, "capture_after_click"):
+        return capture_api.capture_after_click(runtime_state_dir=runtime)
     return capture_api.capture_locked_target(runtime_state_dir=runtime)
 
 
@@ -109,6 +112,7 @@ def _execute_record(
     capture_api: Any,
     verifier_api: Any,
     verify_click: bool,
+    post_click_pause_ms: int,
 ) -> tuple[bool, dict[str, Any] | None]:
     attempts: list[dict[str, Any]] = []
     candidates = record.get("click_candidates")
@@ -154,6 +158,9 @@ def _execute_record(
 
         if isinstance(actual_position, dict):
             attempt["actual_cursor_position"] = actual_position
+
+        if post_click_pause_ms > 0:
+            time.sleep(post_click_pause_ms / 1000.0)
 
         if not verify_click:
             attempt["status"] = "clicked"
@@ -238,6 +245,7 @@ def run(
     capture_api: Any = None,
     verifier_api: Any = None,
     verify_click: bool = True,
+    post_click_pause_ms: int = 250,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     _ = source
     gate_path, run_path, report_path = (
@@ -272,6 +280,7 @@ def run(
                     capture_api=capture_api,
                     verifier_api=verifier_api,
                     verify_click=verify_click,
+                    post_click_pause_ms=post_click_pause_ms,
                 )
                 if error is not None:
                     validation.setdefault("errors", []).append(
@@ -324,12 +333,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--source", choices=["auto"], default="auto")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--pause-ms", type=int, default=120)
+    parser.add_argument("--post-click-pause-ms", type=int, default=250)
     parser.add_argument("--skip-verify", action="store_true")
     args = parser.parse_args(argv)
     run_payload, report = run(
         args.source,
         dry_run=args.dry_run,
         pause_ms=args.pause_ms,
+        post_click_pause_ms=args.post_click_pause_ms,
         verify_click=not args.skip_verify,
     )
     print(

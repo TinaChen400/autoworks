@@ -32,6 +32,18 @@ class FakeCapture:
         return path, {"capture_index": self.calls}
 
 
+class FakeAfterClickCapture:
+    def __init__(self, runtime: Path) -> None:
+        self.runtime = runtime
+        self.calls = 0
+
+    def capture_after_click(self, runtime_state_dir: Path) -> tuple[Path, dict]:
+        self.calls += 1
+        path = runtime_state_dir / f"after_click_{self.calls}.png"
+        path.write_bytes(b"fake")
+        return path, {"capture_index": self.calls, "capture_source": "after_click"}
+
+
 def _action(
     skill: str = "click_option",
     include_click_point: bool = True,
@@ -179,6 +191,7 @@ def test_verified_click_stops_after_selected_candidate(tmp_path: Path) -> None:
         capture_api=fake_capture,
         verifier_api=verifier,
         pause_ms=5,
+        post_click_pause_ms=0,
     )
 
     record = report["action_records"][0]
@@ -188,6 +201,29 @@ def test_verified_click_stops_after_selected_candidate(tmp_path: Path) -> None:
     assert report["executed_action_count"] == 1
     assert record["status"] == "clicked_verified"
     assert record["verified_candidate_index"] == 0
+
+
+def test_verified_click_accepts_after_click_capture_api(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True))
+    fake_mouse = FakeMouse()
+    fake_capture = FakeAfterClickCapture(runtime)
+
+    def verifier(_record: dict, _candidate: dict, _capture_path: Path, _provenance: dict) -> dict:
+        return {"status": "selected", "reason": "test"}
+
+    _run_payload, report = run(
+        "auto",
+        runtime_dir=runtime,
+        mouse_api=fake_mouse,
+        capture_api=fake_capture,
+        verifier_api=verifier,
+        post_click_pause_ms=0,
+    )
+
+    assert fake_capture.calls == 1
+    assert report["validation_passed"] is True
+    assert report["action_records"][0]["status"] == "clicked_verified"
 
 
 def test_click_verification_retries_next_candidate(tmp_path: Path) -> None:
@@ -207,6 +243,7 @@ def test_click_verification_retries_next_candidate(tmp_path: Path) -> None:
         capture_api=fake_capture,
         verifier_api=verifier,
         pause_ms=5,
+        post_click_pause_ms=0,
     )
 
     record = report["action_records"][0]
@@ -236,6 +273,7 @@ def test_inconclusive_click_verification_stops_safely(tmp_path: Path) -> None:
         mouse_api=fake_mouse,
         capture_api=fake_capture,
         verifier_api=verifier,
+        post_click_pause_ms=0,
     )
 
     assert fake_mouse.calls == [(160, 270, 120)]

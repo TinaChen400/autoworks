@@ -43,9 +43,10 @@ def verify_selected_state(
             "reason": "candidate_click_point_raw_out_of_bounds",
         }
 
-    radius = 9
+    radius = 18
     saturated = 0
     dark = 0
+    selected_green = 0
     total = 0
     for sample_y in range(max(0, y - radius), min(height, y + radius + 1)):
         for sample_x in range(max(0, x - radius), min(width, x + radius + 1)):
@@ -56,6 +57,8 @@ def verify_selected_state(
             color_range = max(red, green, blue) - min(red, green, blue)
             if color_range >= 45 and max(red, green, blue) >= 80:
                 saturated += 1
+            if green >= 90 and green >= red + 18 and green >= blue + 18:
+                selected_green += 1
             if red + green + blue <= 210:
                 dark += 1
 
@@ -64,7 +67,8 @@ def verify_selected_state(
 
     saturated_ratio = saturated / total
     dark_ratio = dark / total
-    selected = saturated_ratio >= 0.08 or dark_ratio >= 0.18
+    selected_green_ratio = selected_green / total
+    selected = saturated_ratio >= 0.06 or dark_ratio >= 0.18 or selected_green_ratio >= 0.015
     return {
         "status": "selected" if selected else "not_selected",
         "reason": "local_control_state_heuristic",
@@ -72,5 +76,6 @@ def verify_selected_state(
             "sample_count": total,
             "saturated_ratio": round(saturated_ratio, 4),
             "dark_ratio": round(dark_ratio, 4),
+            "selected_green_ratio": round(selected_green_ratio, 4),
         },
     }
