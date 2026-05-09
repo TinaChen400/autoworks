@@ -9,6 +9,7 @@ from modules.answer_engine import answer_engine, input_loader, panel, user_profi
 from modules.answer_engine.answer_validator import validate_decision
 from modules.answer_engine.decision_store import save_decision
 from modules.answer_engine import decision_store
+from modules.answer_engine import profile_llm_strategy
 from modules.answer_engine.strategies import multiple_choice_strategy, text_input_strategy, unknown_strategy
 
 
@@ -140,6 +141,253 @@ def test_answer_engine_does_not_call_external_llm(tmp_path, monkeypatch):
     decision, _report = answer_engine.build_answer_decision("auto")
     assert decision["question_decisions"]
     assert input_loader.load_config()["allow_llm_answerer"] is False
+
+
+def test_profile_llm_single_choice_selects_existing_option(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(
+        tmp_path / "config" / "user_profile.json",
+        {"notes": ["I think the new broadband setup app idea is essentially the same as what already exists."]},
+    )
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Compared to what already exists?"},
+        "answer_options": [
+            {"option_id": "T27", "text": "What exists already is better than this"},
+            {"option_id": "T28", "text": "This is essentially the same as what already exists"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+
+    def fake_call(**_kwargs):
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T28"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "mainstream practical consumer persona",
+                "reason": "Matches profile note.",
+                "evidence": [
+                    {
+                        "source": "user_profile.notes",
+                        "value": "same as what already exists",
+                        "matched_text": "This is essentially the same as what already exists",
+                    }
+                ],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["answer_strategy"] == "profile_llm_strategy"
+    assert qd["answer_mode"] == "representative_persona"
+    assert qd["recommended_option_ids"] == ["T28"]
+    assert qd["requires_human_review"] is False
+    assert report["validation_passed"] is True
+    assert report["requires_human_review"] is False
+
+
+def test_profile_llm_missing_profile_can_use_representative_persona(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [account_question()]}},
+    )
+
+    def fake_call(**_kwargs):
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["o2"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "mainstream representative account/tool usage",
+                "reason": "Selected a plausible mainstream option.",
+                "evidence": [],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["answer_strategy"] == "profile_llm_strategy"
+    assert qd["answer_mode"] == "representative_persona"
+    assert qd["requires_human_review"] is False
+    assert report["requires_human_review"] is False
+
+
+def test_profile_llm_text_input_generates_profile_backed_text(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(
+        tmp_path / "config" / "user_profile.json",
+        {"known_tools": ["Virgin Media broadband app"], "notes": ["I prefer concise survey answers."]},
+    )
+    question = {
+        "question_id": "q1",
+        "question_type": "text_input",
+        "question_stem": {"text": "Please explain your answer in detail."},
+        "answer_options": [],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+
+    def fake_call(**_kwargs):
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": [],
+                "recommended_text_answer": "It feels too similar to existing setup support to be especially useful.",
+                "confidence": 0.9,
+                "basis": "mainstream practical consumer persona",
+                "reason": "Generated from profile preference.",
+                "evidence": [
+                    {
+                        "source": "user_profile.notes",
+                        "value": "I prefer concise survey answers.",
+                    }
+                ],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["recommended_text_answer"].startswith("It feels")
+    assert qd["requires_human_review"] is False
+    assert report["validation_passed"] is True
+
+
+def test_profile_llm_strict_private_without_profile_requires_review(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    question = {
+        "question_id": "q1",
+        "question_type": "text_input",
+        "question_stem": {"text": "What is your exact address?"},
+        "answer_options": [],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["answer_mode"] == "strict_private"
+    assert qd["requires_human_review"] is True
+    assert "user_profile.json" in qd["human_review_reason"]
+    assert report["requires_human_review"] is True
+
+
+def test_professional_research_range_uses_professional_judgement(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(
+        tmp_path / "config" / "user_profile.json",
+        {
+            "professional_identity_policy": {
+                "allow_representative_professional_identity": True,
+                "allowed_research_contexts": ["independent research", "self-directed research"],
+            }
+        },
+    )
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Where do you conduct your research?"},
+        "answer_options": [
+            {"option_id": "o1", "text": "University"},
+            {"option_id": "o2", "text": "Independent / self-directed"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+
+    def fake_call(**kwargs):
+        assert '"answer_mode":"professional_judgement"' in kwargs["prompt"]
+        return json.dumps(
+            {
+                "answer_mode": "professional_judgement",
+                "recommended_option_ids": ["o2"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "allowed professional identity range: independent research",
+                "reason": "The profile allows broad independent/self-directed research context.",
+                "evidence": [],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["answer_mode"] == "professional_judgement"
+    assert qd["recommended_option_ids"] == ["o2"]
+    assert qd["requires_human_review"] is False
+    assert report["requires_human_review"] is False
 
 
 def test_panel_can_load_without_clicking(tmp_path, monkeypatch):

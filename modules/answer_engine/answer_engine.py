@@ -7,6 +7,7 @@ from .decision_store import save_decision, save_report
 from .input_loader import load_config, load_parse, load_session
 from .question_classifier import classify_category, detect_question_type
 from .schema import answer_decision
+from .profile_llm_strategy import decide as profile_llm_decide, should_use_profile_llm
 from .user_profile_loader import load_user_profile
 from .strategies import (
     form_fill_strategy,
@@ -44,9 +45,15 @@ def build_answer_decision(source: str = "auto") -> tuple[dict, dict]:
         question_type = detect_question_type(question)
         question["question_type"] = question_type
         category = classify_category(question)
-        strategy = choose_strategy(question_type)
-        qd = strategy.decide(question, category, profile, session, config)
-        if not profile_exists and category in {
+        if should_use_profile_llm(config, question_type):
+            qd = profile_llm_decide(question, category, profile, profile_exists, session, config)
+        else:
+            strategy = choose_strategy(question_type)
+            qd = strategy.decide(question, category, profile, session, config)
+        if (
+            not profile_exists
+            and qd.get("answer_mode") == "strict_private"
+            and category in {
             "personal_experience",
             "account_ownership",
             "device_capability",
@@ -54,7 +61,8 @@ def build_answer_decision(source: str = "auto") -> tuple[dict, dict]:
             "demographic",
             "preference",
             "screening_question",
-        }:
+            }
+        ):
             qd["requires_human_review"] = True
             qd["human_review_reason"] = qd["human_review_reason"] or "config/user_profile.json is missing."
             if "user_profile missing" not in qd["warnings"]:

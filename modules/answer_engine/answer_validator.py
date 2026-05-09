@@ -26,14 +26,23 @@ def validate_decision(decision: dict, parsed_page: dict, config: dict, session: 
 
     for qd in decision.get("question_decisions", []):
         question = question_map.get(qd.get("question_id", ""), {})
+        answer_mode = str(qd.get("answer_mode") or "strict_private")
         if qd.get("question_category") in PERSONAL_CATEGORIES:
             has_answer = bool(qd.get("recommended_option_ids") or qd.get("recommended_text_answer"))
-            if has_answer and not qd.get("evidence"):
+            if has_answer and answer_mode == "strict_private" and not qd.get("evidence"):
                 issues.append(
                     {
                         "type": "unsupported_personal_claim",
                         "question_id": qd.get("question_id", ""),
                         "message": "Personal answer has no supporting evidence.",
+                    }
+                )
+            if has_answer and answer_mode in {"representative_persona", "professional_judgement"} and not qd.get("basis"):
+                issues.append(
+                    {
+                        "type": "missing_answer_basis",
+                        "question_id": qd.get("question_id", ""),
+                        "message": "Representative/professional answer has no basis.",
                     }
                 )
 
