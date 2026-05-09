@@ -93,7 +93,9 @@ def validate_decision(decision: dict, parsed_page: dict, config: dict, session: 
             }
         )
 
-    requires_review = bool(issues or warnings or decision.get("requires_human_review", True))
+    parse_warnings_require_review = bool(config.get("parse_uncertainties_require_review", True))
+    blocking_warnings = warnings if parse_warnings_require_review else []
+    requires_review = bool(issues or blocking_warnings or decision.get("requires_human_review", True))
     return {
         "validation_passed": not issues,
         "issues": issues,

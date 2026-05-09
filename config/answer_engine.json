@@ -10,6 +10,7 @@
   "profile_llm_supported_question_types": ["single_choice", "multiple_choice", "text_input", "number_input"],
   "profile_llm_answer_modes": ["representative_persona", "professional_judgement", "strict_private"],
   "minimum_confidence_without_review": 0.85,
+  "parse_uncertainties_require_review": false,
   "personal_fact_questions_require_evidence": true,
   "all_of_the_above_requires_all_evidence": true,
   "answer_tone": "honest, concise, natural",

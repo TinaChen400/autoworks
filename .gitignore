@@ -39,5 +39,6 @@ runtime_state/
 
 # Secrets
 config/secrets.json
+config/user_profile.json
 runtime_state_backup/
 runtime_state_backup/

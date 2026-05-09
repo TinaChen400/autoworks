@@ -63,6 +63,7 @@ def load_config() -> dict:
         "profile_llm_num_predict": 512,
         "profile_llm_supported_question_types": ["single_choice", "multiple_choice", "text_input", "number_input"],
         "minimum_confidence_without_review": 0.85,
+        "parse_uncertainties_require_review": True,
         "personal_fact_questions_require_evidence": True,
         "all_of_the_above_requires_all_evidence": True,
         "answer_tone": "honest, concise, natural",
