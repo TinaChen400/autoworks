@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 
@@ -37,6 +38,60 @@ def numeric_click_point_screen(action: dict[str, Any]) -> tuple[int, int] | None
         return None
 
 
+def _numeric_candidate(candidate: Any) -> dict[str, Any] | None:
+    if not isinstance(candidate, dict):
+        return None
+    click_point = candidate.get("click_point_screen")
+    if not isinstance(click_point, dict):
+        return None
+    try:
+        x = click_point["x"]
+        y = click_point["y"]
+    except KeyError:
+        return None
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    try:
+        normalized = deepcopy(candidate)
+        normalized["click_point_screen"] = {
+            "x": int(round(float(x))),
+            "y": int(round(float(y))),
+        }
+        return normalized
+    except (TypeError, ValueError):
+        return None
+
+
+def click_candidates(
+    action: dict[str, Any],
+    primary_x: int,
+    primary_y: int,
+) -> list[dict[str, Any]]:
+    target = _target(action)
+    primary: dict[str, Any] = {
+        "source": str(target.get("resolver_source") or "click_point_screen"),
+        "click_point_screen": {"x": primary_x, "y": primary_y},
+        "is_primary": True,
+    }
+    if isinstance(target.get("click_point_raw"), dict):
+        primary["click_point_raw"] = deepcopy(target["click_point_raw"])
+    if isinstance(target.get("click_point_norm"), dict):
+        primary["click_point_norm"] = deepcopy(target["click_point_norm"])
+    candidates: list[dict[str, Any]] = [primary]
+    seen = {(primary_x, primary_y)}
+    for candidate in target.get("click_candidates", []) or []:
+        normalized = _numeric_candidate(candidate)
+        if normalized is None:
+            continue
+        point = normalized["click_point_screen"]
+        key = (point["x"], point["y"])
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(normalized)
+    return candidates
+
+
 def _is_unresolved(action: dict[str, Any]) -> bool:
     target = _target(action)
     unresolved_values = {"unresolved", "human_review_required", "needs_review"}
@@ -57,6 +112,7 @@ def action_record(action: dict[str, Any], x: int, y: int, dry_run: bool) -> dict
         "option_id": target.get("option_id", ""),
         "option_text": target.get("option_text", ""),
         "click_point_screen": {"x": x, "y": y},
+        "click_candidates": click_candidates(action, x, y),
         "real_execution": not dry_run,
         "dry_run": dry_run,
         "status": "would_click" if dry_run else "pending",

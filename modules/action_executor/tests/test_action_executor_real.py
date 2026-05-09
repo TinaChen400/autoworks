@@ -20,6 +20,18 @@ class FakeMouse:
         return {"x": x, "y": y}
 
 
+class FakeCapture:
+    def __init__(self, runtime: Path) -> None:
+        self.runtime = runtime
+        self.calls = 0
+
+    def capture_locked_target(self, runtime_state_dir: Path) -> tuple[Path, dict]:
+        self.calls += 1
+        path = runtime_state_dir / f"capture_{self.calls}.png"
+        path.write_bytes(b"fake")
+        return path, {"capture_index": self.calls}
+
+
 def _action(
     skill: str = "click_option",
     include_click_point: bool = True,
@@ -33,6 +45,19 @@ def _action(
     if include_click_point:
         target["click_point_screen"] = {"x": 160, "y": 270}
         target["click_point_raw"] = {"x": 60, "y": 70}
+        target["click_candidates"] = [
+            {
+                "source": "primary",
+                "is_primary": True,
+                "click_point_screen": {"x": 160, "y": 270},
+                "click_point_raw": {"x": 60, "y": 70},
+            },
+            {
+                "source": "fallback",
+                "click_point_screen": {"x": 170, "y": 280},
+                "click_point_raw": {"x": 70, "y": 80},
+            },
+        ]
     return {
         "action_id": "a1",
         "skill": skill,
@@ -118,7 +143,13 @@ def test_allowed_click_option_creates_executable_records(tmp_path: Path) -> None
     _write_json(runtime / "latest_execution_gate.json", _gate(True))
     fake_mouse = FakeMouse()
 
-    _run_payload, report = run("auto", runtime_dir=runtime, mouse_api=fake_mouse, pause_ms=5)
+    _run_payload, report = run(
+        "auto",
+        runtime_dir=runtime,
+        mouse_api=fake_mouse,
+        pause_ms=5,
+        verify_click=False,
+    )
 
     assert fake_mouse.calls == [(160, 270, 5)]
     assert report["validation_passed"] is True
@@ -130,6 +161,88 @@ def test_allowed_click_option_creates_executable_records(tmp_path: Path) -> None
     assert report["action_records"][0]["status"] == "clicked"
     assert (runtime / "latest_action_executor_run.json").exists()
     assert (runtime / "latest_action_executor_report.json").exists()
+
+
+def test_verified_click_stops_after_selected_candidate(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True))
+    fake_mouse = FakeMouse()
+    fake_capture = FakeCapture(runtime)
+
+    def verifier(_record: dict, _candidate: dict, _capture_path: Path, _provenance: dict) -> dict:
+        return {"status": "selected", "reason": "test"}
+
+    _run_payload, report = run(
+        "auto",
+        runtime_dir=runtime,
+        mouse_api=fake_mouse,
+        capture_api=fake_capture,
+        verifier_api=verifier,
+        pause_ms=5,
+    )
+
+    record = report["action_records"][0]
+    assert fake_mouse.calls == [(160, 270, 5)]
+    assert fake_capture.calls == 1
+    assert report["validation_passed"] is True
+    assert report["executed_action_count"] == 1
+    assert record["status"] == "clicked_verified"
+    assert record["verified_candidate_index"] == 0
+
+
+def test_click_verification_retries_next_candidate(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True))
+    fake_mouse = FakeMouse()
+    fake_capture = FakeCapture(runtime)
+    statuses = iter(["not_selected", "selected"])
+
+    def verifier(_record: dict, _candidate: dict, _capture_path: Path, _provenance: dict) -> dict:
+        return {"status": next(statuses), "reason": "test"}
+
+    _run_payload, report = run(
+        "auto",
+        runtime_dir=runtime,
+        mouse_api=fake_mouse,
+        capture_api=fake_capture,
+        verifier_api=verifier,
+        pause_ms=5,
+    )
+
+    record = report["action_records"][0]
+    assert fake_mouse.calls == [(160, 270, 5), (170, 280, 5)]
+    assert fake_capture.calls == 2
+    assert report["validation_passed"] is True
+    assert record["status"] == "clicked_verified"
+    assert record["verified_candidate_index"] == 1
+    assert [attempt["status"] for attempt in record["click_attempts"]] == [
+        "not_selected",
+        "clicked_verified",
+    ]
+
+
+def test_inconclusive_click_verification_stops_safely(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True))
+    fake_mouse = FakeMouse()
+    fake_capture = FakeCapture(runtime)
+
+    def verifier(_record: dict, _candidate: dict, _capture_path: Path, _provenance: dict) -> dict:
+        return {"status": "inconclusive", "reason": "ambiguous"}
+
+    _run_payload, report = run(
+        "auto",
+        runtime_dir=runtime,
+        mouse_api=fake_mouse,
+        capture_api=fake_capture,
+        verifier_api=verifier,
+    )
+
+    assert fake_mouse.calls == [(160, 270, 120)]
+    assert report["validation_passed"] is False
+    assert report["executed_action_count"] == 0
+    assert report["action_records"][0]["status"] == "verification_blocked"
+    assert report["errors"][0]["code"] == "click_verification_inconclusive"
 
 
 def test_unsupported_skill_blocks_execution(tmp_path: Path) -> None:

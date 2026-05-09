@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from . import mouse_keyboard
 from .schema import utc_now_iso
+from .selection_verifier import verify_selected_state
 from .safety_guard import validate_gate_for_real_execution
 
 
@@ -63,11 +64,169 @@ def _base_report(
 
 def _load_gate_for_report(gate_path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     if not gate_path.exists():
-        return None, [{"code": "gate_missing", "message": "latest_execution_gate.json is missing."}]
+        return None, [
+            {
+                "code": "gate_missing",
+                "message": "latest_execution_gate.json is missing.",
+            }
+        ]
     try:
         return load_json(gate_path), []
     except (OSError, json.JSONDecodeError) as exc:
         return None, [{"code": "gate_invalid", "message": f"Unable to load execution gate: {exc}"}]
+
+
+def _candidate_point(candidate: dict[str, Any]) -> dict[str, int] | None:
+    point = candidate.get("click_point_screen")
+    if not isinstance(point, dict):
+        return None
+    try:
+        return {"x": int(round(float(point["x"]))), "y": int(round(float(point["y"])))}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _capture_after_click(capture_api: Any, runtime: Path) -> tuple[Path, dict[str, Any]]:
+    if capture_api is None:
+        from modules.window_capture import target_lock
+
+        capture_api = target_lock
+    return capture_api.capture_locked_target(runtime_state_dir=runtime)
+
+
+def _verification_status(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "inconclusive"
+    return str(result.get("status") or "inconclusive")
+
+
+def _execute_record(
+    record: dict[str, Any],
+    *,
+    runtime: Path,
+    pause_ms: int,
+    mouse_api: Any,
+    capture_api: Any,
+    verifier_api: Any,
+    verify_click: bool,
+) -> tuple[bool, dict[str, Any] | None]:
+    attempts: list[dict[str, Any]] = []
+    candidates = record.get("click_candidates")
+    if not isinstance(candidates, list) or not candidates:
+        candidates = [
+            {
+                "source": "click_point_screen",
+                "click_point_screen": record["click_point_screen"],
+                "is_primary": True,
+            }
+        ]
+
+    for index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            continue
+        point = _candidate_point(candidate)
+        if point is None:
+            attempts.append(
+                {
+                    "candidate_index": index,
+                    "status": "skipped",
+                    "reason": "missing_candidate_click_point_screen",
+                }
+            )
+            continue
+
+        attempt: dict[str, Any] = {
+            "candidate_index": index,
+            "source": candidate.get("source", ""),
+            "click_point_screen": point,
+        }
+        try:
+            actual_position = mouse_api.click_screen_point(
+                point["x"],
+                point["y"],
+                pause_ms=pause_ms,
+            )
+        except Exception as exc:  # noqa: BLE001
+            attempt["status"] = "click_failed"
+            attempt["error"] = str(exc)
+            attempts.append(attempt)
+            continue
+
+        if isinstance(actual_position, dict):
+            attempt["actual_cursor_position"] = actual_position
+
+        if not verify_click:
+            attempt["status"] = "clicked"
+            attempts.append(attempt)
+            record["click_point_screen"] = point
+            if isinstance(actual_position, dict):
+                record["actual_cursor_position"] = actual_position
+            record["status"] = "clicked"
+            return True, None
+
+        try:
+            capture_path, provenance = _capture_after_click(capture_api, runtime)
+        except Exception as exc:  # noqa: BLE001
+            attempt["status"] = "verification_blocked"
+            attempt["verification"] = {
+                "status": "inconclusive",
+                "reason": f"capture_failed: {exc}",
+            }
+            attempts.append(attempt)
+            record["status"] = "verification_blocked"
+            record["click_attempts"] = attempts
+            return False, {
+                "code": "click_verification_blocked",
+                "message": str(exc),
+                "action_id": record.get("action_id", ""),
+            }
+
+        verifier = verifier_api or verify_selected_state
+        try:
+            verification = verifier(record, candidate, capture_path, provenance)
+        except Exception as exc:  # noqa: BLE001
+            verification = {
+                "status": "inconclusive",
+                "reason": f"verifier_failed: {exc}",
+            }
+        attempt["capture_path"] = str(capture_path)
+        attempt["capture_provenance"] = provenance
+        attempt["verification"] = verification if isinstance(verification, dict) else {}
+        status = _verification_status(verification)
+        if status == "selected":
+            attempt["status"] = "clicked_verified"
+            attempts.append(attempt)
+            record["click_point_screen"] = point
+            if isinstance(actual_position, dict):
+                record["actual_cursor_position"] = actual_position
+            record["verified_candidate_index"] = index
+            record["verification"] = attempt["verification"]
+            record["status"] = "clicked_verified"
+            record["click_attempts"] = attempts
+            return True, None
+        if status != "not_selected":
+            attempt["status"] = "verification_blocked"
+            attempts.append(attempt)
+            record["status"] = "verification_blocked"
+            record["click_attempts"] = attempts
+            return False, {
+                "code": "click_verification_inconclusive",
+                "message": str(
+                    (attempt["verification"] or {}).get("reason")
+                    or "Click verification was inconclusive."
+                ),
+                "action_id": record.get("action_id", ""),
+            }
+        attempt["status"] = "not_selected"
+        attempts.append(attempt)
+
+    record["status"] = "not_selected"
+    record["click_attempts"] = attempts
+    return False, {
+        "code": "click_not_verified",
+        "message": "No click candidate produced a verified selected state.",
+        "action_id": record.get("action_id", ""),
+    }
 
 
 def run(
@@ -76,6 +235,9 @@ def run(
     pause_ms: int = 120,
     runtime_dir: str | Path | None = None,
     mouse_api: Any = mouse_keyboard,
+    capture_api: Any = None,
+    verifier_api: Any = None,
+    verify_click: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     _ = source
     gate_path, run_path, report_path = (
@@ -100,28 +262,23 @@ def run(
         if dry_run:
             executed_action_count = len(action_records)
         else:
+            runtime = RUNTIME_DIR if runtime_dir is None else Path(runtime_dir)
             for record in action_records:
-                point = record["click_point_screen"]
-                try:
-                    actual_position = mouse_api.click_screen_point(
-                        point["x"],
-                        point["y"],
-                        pause_ms=pause_ms,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    record["status"] = "failed"
+                clicked, error = _execute_record(
+                    record,
+                    runtime=runtime,
+                    pause_ms=pause_ms,
+                    mouse_api=mouse_api,
+                    capture_api=capture_api,
+                    verifier_api=verifier_api,
+                    verify_click=verify_click,
+                )
+                if error is not None:
                     validation.setdefault("errors", []).append(
-                        {
-                            "code": "mouse_click_failed",
-                            "message": str(exc),
-                            "action_id": record.get("action_id", ""),
-                        }
+                        error
                     )
-                    continue
-                if isinstance(actual_position, dict):
-                    record["actual_cursor_position"] = actual_position
-                record["status"] = "clicked"
-                executed_action_count += 1
+                if clicked:
+                    executed_action_count += 1
 
     skipped_action_count = max(int(validation.get("action_count", 0)) - executed_action_count, 0)
     validation["action_records"] = action_records
@@ -167,8 +324,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--source", choices=["auto"], default="auto")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--pause-ms", type=int, default=120)
+    parser.add_argument("--skip-verify", action="store_true")
     args = parser.parse_args(argv)
-    run_payload, report = run(args.source, dry_run=args.dry_run, pause_ms=args.pause_ms)
+    run_payload, report = run(
+        args.source,
+        dry_run=args.dry_run,
+        pause_ms=args.pause_ms,
+        verify_click=not args.skip_verify,
+    )
     print(
         "Saved runtime_state/latest_action_executor_run.json "
         f"(status={run_payload.get('status')}, real_execution={report.get('real_execution')})."
