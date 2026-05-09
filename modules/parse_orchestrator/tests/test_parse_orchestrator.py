@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from modules.parse_orchestrator.input_loader import load_layout_index
+from modules.parse_orchestrator.metrics import build_metrics
 from modules.parse_orchestrator.orchestrator import run_orchestrated_parse
 from modules.parse_orchestrator.strategy_selector import select_strategy
 from modules.parse_orchestrator.vision_runner import (
@@ -250,3 +251,133 @@ def test_vision_runner_warns_multi_region_mvp(monkeypatch: pytest.MonkeyPatch) -
     )
 
     assert MULTI_REGION_MVP_WARNING in result.warnings
+
+
+def test_metrics_accepts_validation_passed_key(tmp_path: Path) -> None:
+    metrics = build_metrics(
+        plan={"plan_id": "p1", "selected_input_images": []},
+        parsed_page={"page": {"page_type": "form", "confidence": 0.9}},
+        validation_report={"validation_passed": True},
+        model_calls_count=1,
+        elapsed_time_ms=1,
+        fallback_used=False,
+        fallback_reason="",
+        warnings=[],
+    )
+
+    assert metrics.validation_passed is True
+
+
+def test_orchestrator_falls_back_to_doubao_overview_for_non_actionable_parse(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_context = _runtime_context(tmp_path)
+    layout = _layout(tmp_path)
+    calls: list[dict] = []
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.load_runtime_context",
+        lambda: runtime_context,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_layout_index", lambda: layout)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_config", _config)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_plan", lambda _p: None)
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.save_parse_metrics",
+        lambda _m: None,
+    )
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.save_orchestrated_parse",
+        lambda _p: None,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_report", lambda _r: None)
+
+    def fake_run_vision_parser(plan: dict) -> object:
+        calls.append(plan)
+        if plan["selected_mode"] == "doubao":
+            parsed = {
+                "page": {"page_type": "form", "confidence": 0.9},
+                "questions": [
+                    {
+                        "question_id": "q1",
+                        "question_type": "single_choice",
+                        "question_stem": {"text": "Question?"},
+                        "answer_options": [{"option_id": "a1", "text": "Yes"}],
+                    }
+                ],
+            }
+        else:
+            parsed = {"page": {"page_type": "unknown", "confidence": 0.1}, "questions": []}
+        from modules.parse_orchestrator.vision_runner import VisionRunResult
+
+        return VisionRunResult(
+            parsed_page=parsed,
+            validation_report={"validation_passed": True},
+            model_calls_count=1,
+        )
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.run_vision_parser",
+        fake_run_vision_parser,
+    )
+
+    report = run_orchestrated_parse(mode="fake")
+
+    assert len(calls) == 2
+    assert calls[1]["selected_mode"] == "doubao"
+    assert calls[1]["selected_input_images"] == [str(layout["annotated_overview"])]
+    assert report["validation_passed"] is True
+    assert report["requires_human_review"] is False
+
+
+def test_orchestrator_reports_failed_doubao_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_context = _runtime_context(tmp_path)
+    layout = _layout(tmp_path)
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.load_runtime_context",
+        lambda: runtime_context,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_layout_index", lambda: layout)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_config", _config)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_plan", lambda _p: None)
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.save_parse_metrics",
+        lambda _m: None,
+    )
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.save_orchestrated_parse",
+        lambda _p: None,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_report", lambda _r: None)
+
+    def fake_run_vision_parser(plan: dict) -> object:
+        from modules.parse_orchestrator.vision_runner import VisionRunResult
+
+        if plan["selected_mode"] == "doubao":
+            return VisionRunResult(
+                parsed_page={"page": {"page_type": "unknown"}, "questions": []},
+                validation_report={"validation_passed": False},
+                model_calls_count=1,
+                error="network timeout",
+            )
+        return VisionRunResult(
+            parsed_page={"page": {"page_type": "unknown"}, "questions": []},
+            validation_report={"validation_passed": True},
+            model_calls_count=1,
+        )
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.run_vision_parser",
+        fake_run_vision_parser,
+    )
+
+    report = run_orchestrated_parse(mode="fake")
+
+    assert report["requires_human_review"] is True
+    assert report["model_calls_count"] == 2
+    assert "Doubao fallback failed: network timeout" in report["warnings"]

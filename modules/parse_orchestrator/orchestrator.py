@@ -31,6 +31,46 @@ from modules.parse_orchestrator.vision_runner import (
 )
 
 
+def _parsed_page_is_actionable(parsed_page: dict[str, Any]) -> bool:
+    questions = parsed_page.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return False
+    for question in questions:
+        if not isinstance(question, dict):
+            continue
+        question_type = str(question.get("question_type") or "unknown")
+        stem = (
+            question.get("question_stem")
+            if isinstance(question.get("question_stem"), dict)
+            else {}
+        )
+        question_text = str(stem.get("text") or "").strip()
+        options = question.get("answer_options")
+        if question_type != "unknown" and question_text and isinstance(options, list) and options:
+            return True
+    return False
+
+
+def _fallback_plan_from_overview(plan_data: dict[str, Any]) -> dict[str, Any]:
+    fallback = dict(plan_data)
+    selected_images = [str(item) for item in fallback.get("selected_input_images", [])]
+    overview = next(
+        (image for image in selected_images if image.endswith("latest_annotated_overview.png")),
+        "",
+    )
+    if not overview:
+        overview = selected_images[0] if selected_images else ""
+    fallback["plan_id"] = new_id("plan")
+    fallback["selected_strategy"] = "annotated_overview_parse"
+    fallback["selected_mode"] = "doubao"
+    fallback["selected_output_level"] = "light"
+    fallback["selected_input_images"] = [overview] if overview else []
+    fallback["use_annotated_overview"] = bool(overview)
+    fallback["use_full_screenshot"] = False
+    fallback["reason"] = "Fallback to Doubao overview after non-actionable parse."
+    return fallback
+
+
 def run_orchestrated_parse(
     *,
     mode: str | None = None,
@@ -55,17 +95,41 @@ def run_orchestrated_parse(
     save_parse_plan(plan_data)
 
     vision_result = run_vision_parser(plan_data)
+    fallback_used = False
+    fallback_reason = ""
+    fallback_warnings: list[str] = []
+    model_calls_count = vision_result.model_calls_count
+    if (
+        plan_data.get("selected_mode") != "doubao"
+        and not _parsed_page_is_actionable(vision_result.parsed_page)
+    ):
+        fallback_plan = _fallback_plan_from_overview(plan_data)
+        fallback_result = run_vision_parser(fallback_plan)
+        fallback_used = True
+        fallback_reason = "non_actionable_parse"
+        model_calls_count += fallback_result.model_calls_count
+        fallback_warnings.extend(fallback_result.warnings)
+        if not fallback_result.error and _parsed_page_is_actionable(fallback_result.parsed_page):
+            plan_data = fallback_plan
+            save_parse_plan(plan_data)
+            vision_result = fallback_result
+        else:
+            if fallback_result.error:
+                fallback_warnings.append(f"Doubao fallback failed: {fallback_result.error}")
+            elif not _parsed_page_is_actionable(fallback_result.parsed_page):
+                fallback_warnings.append("Doubao fallback did not produce an actionable parse.")
+
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    warnings = list(decision.warnings) + list(vision_result.warnings)
-    fallback_used = bool(vision_result.error)
-    fallback_reason = vision_result.error
+    warnings = list(decision.warnings) + list(vision_result.warnings) + fallback_warnings
+    fallback_used = fallback_used or bool(vision_result.error)
+    fallback_reason = fallback_reason or vision_result.error
     if vision_result.error:
         warnings.append(vision_result.error)
     metrics = build_metrics(
         plan=plan_data,
         parsed_page=vision_result.parsed_page,
         validation_report=vision_result.validation_report,
-        model_calls_count=vision_result.model_calls_count,
+        model_calls_count=model_calls_count,
         elapsed_time_ms=elapsed_ms,
         fallback_used=fallback_used,
         fallback_reason=fallback_reason,
@@ -77,6 +141,7 @@ def run_orchestrated_parse(
     requires_human_review = (
         plan.selected_strategy == "manual_review_required"
         or not metrics.validation_passed
+        or not _parsed_page_is_actionable(vision_result.parsed_page)
         or "ambiguous" in " ".join(warnings).lower()
     )
     orchestrated = OrchestratedParse(
@@ -116,7 +181,9 @@ def run_orchestrated_parse(
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Coordinate perception_indexer and vision_parser.")
+    parser = argparse.ArgumentParser(
+        description="Coordinate perception_indexer and vision_parser."
+    )
     parser.add_argument("--mode", choices=["fake", "doubao"], default=None)
     parser.add_argument("--parser-type", default="auto")
     parser.add_argument("--output-level", choices=["light", "standard"], default=None)
