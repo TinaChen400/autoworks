@@ -78,13 +78,13 @@ def build_capture_provenance(
     with Image.open(output_path) as image:
         image_width, image_height = image.size
 
-    locked_region = _placement_to_dict(locked_target) if locked_target is not None else {}
-    bbox = locked_region or {
+    capture_region = {
         "left": int(capture_target["x"]),
         "top": int(capture_target["y"]),
         "width": int(capture_target["width"]),
         "height": int(capture_target["height"]),
     }
+    target_window_rect = _placement_to_dict(locked_target) if locked_target is not None else {}
     screenshot_mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat()
     target_locked = locked_target is not None
     return {
@@ -92,8 +92,16 @@ def build_capture_provenance(
         "target_locked": target_locked,
         "target_window_title": target_window_title if target_locked else "",
         "target_window_handle": target_window_handle if target_locked else None,
-        "locked_region": locked_region,
-        "bbox": bbox,
+        "capture_region": capture_region,
+        "anchor_frame": {
+            "x": capture_region["left"],
+            "y": capture_region["top"],
+            "width": capture_region["width"],
+            "height": capture_region["height"],
+        },
+        "locked_region": capture_region,
+        "bbox": capture_region,
+        "target_window_rect": target_window_rect,
         "dpi_scale": dpi_scale,
         "capture_path": str(output_path),
         "screenshot_path": str(output_path),

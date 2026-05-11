@@ -61,13 +61,37 @@ def _placement_from_bbox(bbox: dict[str, Any]) -> WindowPlacement:
 
 
 def _capture_region_from_provenance(provenance: dict[str, Any]) -> WindowPlacement:
-    bbox = provenance.get("locked_region") or provenance.get("bbox")
+    bbox = provenance.get("capture_region") or provenance.get("locked_region") or provenance.get("bbox")
     if not isinstance(bbox, dict):
-        raise ValueError("latest_capture_provenance.json is missing locked_region/bbox.")
+        raise ValueError(
+            "latest_capture_provenance.json is missing capture_region/locked_region/bbox."
+        )
     region = _placement_from_bbox(bbox)
     if region.width <= 0 or region.height <= 0:
         raise ValueError("latest_capture_provenance.json has an invalid capture region.")
     return region
+
+
+def _origin_is_aligned(
+    current: WindowPlacement,
+    region: WindowPlacement,
+    *,
+    tolerance_px: int = 8,
+    dpi_scale: float | None = None,
+) -> bool:
+    if (
+        abs(current.left - region.left) <= tolerance_px
+        and abs(current.top - region.top) <= tolerance_px
+    ):
+        return True
+    if dpi_scale is None or dpi_scale <= 0:
+        return False
+    scaled_left = int(round(region.left * dpi_scale))
+    scaled_top = int(round(region.top * dpi_scale))
+    return (
+        abs(current.left - scaled_left) <= tolerance_px
+        and abs(current.top - scaled_top) <= tolerance_px
+    )
 
 
 def _validate_target_has_not_moved(provenance: dict[str, Any], region: WindowPlacement) -> None:
@@ -81,7 +105,11 @@ def _validate_target_has_not_moved(provenance: dict[str, Any], region: WindowPla
     if not is_valid_window(hwnd_int):
         raise RuntimeError("locked target window is no longer valid.")
     current = get_window_placement(hwnd_int)
-    if current != region:
+    try:
+        dpi_scale = float(provenance.get("dpi_scale") or 0)
+    except (TypeError, ValueError):
+        dpi_scale = None
+    if not _origin_is_aligned(current, region, dpi_scale=dpi_scale):
         raise RuntimeError(
             "locked target moved or resized; refresh panel capture before closed-loop verify. "
             f"expected={region}, current={current}."
@@ -128,6 +156,18 @@ def capture_after_click(
         "target_locked": bool(source_provenance.get("target_locked")),
         "target_window_title": source_provenance.get("target_window_title", ""),
         "target_window_handle": source_provenance.get("target_window_handle"),
+        "capture_region": {
+            "left": region.left,
+            "top": region.top,
+            "width": region.width,
+            "height": region.height,
+        },
+        "anchor_frame": {
+            "x": region.left,
+            "y": region.top,
+            "width": region.width,
+            "height": region.height,
+        },
         "locked_region": {
             "left": region.left,
             "top": region.top,
@@ -140,6 +180,7 @@ def capture_after_click(
             "width": region.width,
             "height": region.height,
         },
+        "target_window_rect": source_provenance.get("target_window_rect") or {},
         "dpi_scale": source_provenance.get("dpi_scale"),
         "screenshot_path": str(output),
         "screenshot_mtime": datetime.fromtimestamp(output.stat().st_mtime).isoformat(),

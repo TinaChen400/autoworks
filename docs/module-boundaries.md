@@ -7,6 +7,13 @@ Each module owns one part of the workflow. Modules should communicate through do
 Can locate KVM windows and capture screenshots with window bounds.
 Cannot parse survey content, decide answers, or perform input actions.
 
+Window capture owns the coordinate-frame contract. `capture_region`,
+`anchor_frame`, `locked_region`, and `bbox` describe the screenshot region used
+for parsing, coordinate conversion, and click mapping. `target_window_rect` is
+diagnostic only; it records the OS-reported outer window rectangle and must not
+replace the capture frame, even when DPI virtualization or a remote shell reports
+a different size.
+
 ## `image_preprocess`
 
 Can crop, normalize, and enhance captured images for downstream consumers.
