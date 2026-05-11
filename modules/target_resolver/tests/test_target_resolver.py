@@ -149,7 +149,7 @@ def _layout_index_with_nearby_visual_control() -> dict:
                 "element_type_hint": "icon_like",
                 "click_point_norm": {"x": 0.392, "y": 0.544},
                 "click_point_raw": {"x": 78, "y": 54},
-                "confidence": 0.87,
+                "confidence": 0.45,
             }
         ],
         "text_blocks": [],
@@ -350,12 +350,42 @@ def test_radio_option_candidates_include_nearby_detected_control_without_ocr() -
     target = resolved["actions"][0]["target"]
     candidate_sources = [candidate["source"] for candidate in target["click_candidates"]]
     assert report["validation_passed"] is True
-    assert target["click_point_raw"] == {"x": 86, "y": 76}
-    assert candidate_sources[0] == "radio_control_left_bias"
+    assert target["click_point_raw"] == {"x": 88, "y": 74}
+    assert target["resolver_source"] == "nearby_detected_control"
+    assert target["control_element_id"] == "E_near"
+    assert target["resolver_confidence"] == 0.82
+    assert candidate_sources[0] == "nearby_detected_control"
+    assert target["click_candidates"][0]["is_primary"] is True
     assert "nearby_detected_control" in candidate_sources
     nearby = next(candidate for candidate in target["click_candidates"] if candidate["source"] == "nearby_detected_control")
     assert nearby["click_point_raw"] == {"x": 88, "y": 74}
     assert nearby["control_element_id"] == "E_near"
+
+
+def test_radio_option_prefers_nearby_detected_control_over_parsed_control_point() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_option", "o1"),
+        _orchestrated_parse_with_option_geometry(
+            click_point_norm={"x": 0.4, "y": 0.565},
+            bbox_norm={"x": 0.36, "y": 0.55, "width": 0.08, "height": 0.03},
+            selection_control="radio",
+            control_click_point_norm={"x": 0.405, "y": 0.565},
+        ),
+        _layout_index_with_nearby_visual_control(),
+        _runtime_context(),
+    )
+
+    target = resolved["actions"][0]["target"]
+    assert report["validation_passed"] is True
+    assert target["resolver_source"] == "nearby_detected_control"
+    assert target["click_point_norm"] == {"x": 0.392, "y": 0.544}
+    assert target["click_point_raw"] == {"x": 88, "y": 74}
+    assert target["resolver_confidence"] == 0.82
+    assert target["click_candidates"][0]["source"] == "nearby_detected_control"
+    assert target["click_candidates"][0]["is_primary"] is True
+    assert "parsed_control_click_point" in [
+        candidate["source"] for candidate in target["click_candidates"]
+    ]
 
 
 def test_invalid_option_id_generates_validation_issue() -> None:

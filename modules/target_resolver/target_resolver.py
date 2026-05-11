@@ -185,6 +185,26 @@ def _add_candidate(candidates: list[dict[str, Any]], candidate: dict[str, Any] |
     candidates.append(candidate)
 
 
+def _promote_primary_candidate(
+    candidates: list[dict[str, Any]],
+    preferred_sources: set[str],
+) -> dict[str, Any] | None:
+    if not candidates:
+        return None
+    selected_index = 0
+    for index, candidate in enumerate(candidates):
+        if str(candidate.get("source") or "") in preferred_sources:
+            selected_index = index
+            break
+    for candidate in candidates:
+        candidate.pop("is_primary", None)
+    primary = candidates[selected_index]
+    primary["is_primary"] = True
+    if selected_index:
+        candidates.insert(0, candidates.pop(selected_index))
+    return primary
+
+
 def _nearby_visual_control_candidates(
     option: dict[str, Any],
     layout_index: dict[str, Any],
@@ -213,7 +233,7 @@ def _nearby_visual_control_candidates(
         if not (min_x <= point["x"] <= max_x and min_y <= point["y"] <= max_y):
             continue
         distance = abs(point["x"] - target_x) + abs(point["y"] - target_y)
-        confidence = float(element.get("confidence", 0.78) or 0.78)
+        confidence = max(float(element.get("confidence", 0.0) or 0.0), 0.82)
         candidate = _candidate_from_norm(
             "nearby_detected_control",
             point,
@@ -410,6 +430,22 @@ def _resolve_from_parsed_geometry(
             control_type=_selection_control(option),
         ),
     )
+
+    primary = _promote_primary_candidate(
+        candidates,
+        {"nearby_detected_control"} if _is_radio_checkbox(option) else {resolver_source},
+    )
+    if primary is not None:
+        click_point_norm = primary["click_point_norm"]
+        click_point_raw = primary["click_point_raw"]
+        click_point_screen = primary["click_point_screen"]
+        resolver_confidence = primary["confidence"]
+        resolver_source = str(primary.get("source") or resolver_source)
+        extra_metadata.pop("resolver_source", None)
+        if primary.get("control_element_id"):
+            extra_metadata["control_element_id"] = str(primary.get("control_element_id") or "")
+        if primary.get("control_type"):
+            extra_metadata["control_type"] = str(primary.get("control_type") or "")
 
     return {
         "click_point_norm": click_point_norm,
