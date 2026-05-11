@@ -89,10 +89,11 @@ def _orchestrated_parse_with_option_geometry(
     control_click_point_norm: dict | None = None,
     control_bbox_norm: dict | None = None,
     control_element_id: str = "",
+    text: str = "Retail Central",
 ) -> dict:
     option = {
         "option_id": "o1",
-        "text": "Retail Central",
+        "text": text,
         "selection_control": selection_control,
     }
     if click_point_norm is not None:
@@ -411,6 +412,29 @@ def test_radio_option_prefers_nearby_detected_control_over_parsed_control_point(
     assert "parsed_control_click_point" in [
         candidate["source"] for candidate in target["click_candidates"]
     ]
+
+
+def test_short_yes_no_radio_prefers_option_text_click_point() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_option", "o1"),
+        _orchestrated_parse_with_option_geometry(
+            click_point_norm={"x": 0.411459, "y": 0.859259},
+            bbox_norm={"x": 0.397917, "y": 0.849074, "width": 0.027083, "height": 0.02037},
+            selection_control="radio",
+            control_click_point_norm={"x": 0.416146, "y": 0.856481},
+            control_element_id="E_right",
+            text="No",
+        ),
+        _layout_index_with_competing_nearby_visual_controls(),
+        _runtime_context(),
+    )
+
+    target = resolved["actions"][0]["target"]
+    assert report["validation_passed"] is True
+    assert target["resolver_source"] == "parsed_option_click_point"
+    assert target["click_point_norm"] == {"x": 0.411459, "y": 0.859259}
+    assert target["click_candidates"][0]["source"] == "parsed_option_click_point"
+    assert target["click_candidates"][0]["is_primary"] is True
 
 
 def test_radio_option_prefers_matching_control_id_over_higher_confidence_neighbor() -> None:

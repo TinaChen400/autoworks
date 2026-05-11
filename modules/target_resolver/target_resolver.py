@@ -442,10 +442,14 @@ def _resolve_from_parsed_geometry(
         ),
     )
 
-    primary = _promote_primary_candidate(
-        candidates,
-        {"nearby_detected_control"} if _is_radio_checkbox(option) else {resolver_source},
+    preferred_sources = (
+        {"parsed_option_click_point"}
+        if _is_radio_checkbox(option) and _option_text_is_short_yes_no(option)
+        else {"nearby_detected_control"}
+        if _is_radio_checkbox(option)
+        else {resolver_source}
     )
+    primary = _promote_primary_candidate(candidates, preferred_sources)
     if primary is not None:
         click_point_norm = primary["click_point_norm"]
         click_point_raw = primary["click_point_raw"]
@@ -475,6 +479,11 @@ def _strip_coordinates(value: Any) -> Any:
     if isinstance(value, list):
         return [_strip_coordinates(child) for child in value]
     return value
+
+
+def _option_text_is_short_yes_no(option: dict[str, Any]) -> bool:
+    text = str(option.get("text") or option.get("raw_text") or "").strip().casefold()
+    return text in {"yes", "no", "oyes", "ono", "0yes", "0no"}
 
 
 def resolve_action_plan(
