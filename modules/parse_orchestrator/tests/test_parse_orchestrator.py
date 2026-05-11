@@ -185,6 +185,67 @@ def _layout_with_yes_no_evidence(tmp_path: Path) -> dict:
     return layout
 
 
+def _layout_with_two_yes_no_cards(tmp_path: Path) -> dict:
+    layout = _layout_with_yes_no_evidence(tmp_path)
+    layout["text_blocks"].extend(
+        [
+            {
+                "text_id": "T4",
+                "text": "Do you make benefits decisions?",
+                "bbox_norm": {"x": 0.2, "y": 0.6, "width": 0.5, "height": 0.04},
+                "associated_region_id": "R10",
+            },
+            {
+                "text_id": "T5",
+                "text": "OYes",
+                "bbox_norm": {"x": 0.22, "y": 0.72, "width": 0.08, "height": 0.04},
+                "associated_region_id": "R10",
+            },
+            {
+                "text_id": "T6",
+                "text": "ONo",
+                "bbox_norm": {"x": 0.22, "y": 0.78, "width": 0.08, "height": 0.04},
+                "associated_region_id": "R10",
+            },
+        ]
+    )
+    layout["elements"].extend(
+        [
+            {
+                "element_id": "E5",
+                "region_id": "R10",
+                "element_type_hint": "icon_like",
+                "click_point_norm": {"x": 0.21, "y": 0.73},
+            },
+            {
+                "element_id": "E6",
+                "region_id": "R10",
+                "element_type_hint": "icon_like",
+                "click_point_norm": {"x": 0.21, "y": 0.79},
+            },
+        ]
+    )
+    layout["relationships"].extend(
+        [
+            {
+                "relationship_id": "REL3",
+                "relationship_type": "nearby_text",
+                "source_id": "T5",
+                "target_id": "E5",
+                "confidence": 0.35,
+            },
+            {
+                "relationship_id": "REL4",
+                "relationship_type": "nearby_text",
+                "source_id": "T6",
+                "target_id": "E6",
+                "confidence": 0.35,
+            },
+        ]
+    )
+    return layout
+
+
 def test_load_layout_index_fixture() -> None:
     layout = load_layout_index()
     assert layout["layout_hints"]["recommended_regions_for_detail_parse"]
@@ -409,6 +470,29 @@ def test_ollama_evidence_parse_repairs_yes_no_response_drift(tmp_path: Path) -> 
     assert [option["option_id"] for option in question["answer_options"]] == ["T2", "T3"]
     assert [option["text"] for option in question["answer_options"]] == ["Yes", "No"]
     assert [option["raw_text"] for option in question["answer_options"]] == ["OYes", "ONo"]
+
+
+def test_ollama_evidence_parse_recovers_repeated_yes_no_cards(tmp_path: Path) -> None:
+    layout = _layout_with_two_yes_no_cards(tmp_path)
+    evidence = build_evidence_payload(
+        layout,
+        _runtime_context(tmp_path),
+        _config(),
+        {"selected_region_ids": ["R9", "R10"]},
+    )
+
+    parsed = parsed_page_from_compact_response(
+        json.dumps({"form_elements": [{"type": "radio", "options": ["A", "B"]}]}),
+        evidence,
+        _runtime_context(tmp_path),
+    )
+
+    assert len(parsed["questions"]) == 2
+    assert [question["question_id"] for question in parsed["questions"]] == ["q1", "q2"]
+    assert [
+        [option["option_id"] for option in question["answer_options"]]
+        for question in parsed["questions"]
+    ] == [["T2", "T3"], ["T5", "T6"]]
 
 
 def test_orchestrator_uses_ollama_evidence_mode(

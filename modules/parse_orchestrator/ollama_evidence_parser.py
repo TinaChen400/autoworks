@@ -299,6 +299,10 @@ def parsed_page_from_compact_response(
     if not option_text_ids:
         raise ValidationError("Ollama compact parse did not return grounded option_text_ids.")
 
+    question_groups = _infer_yes_no_question_groups_from_evidence(evidence)
+    if question_groups:
+        return _parsed_page_from_question_groups(compact, question_groups, evidence, runtime_context)
+
     stem_texts = [text_by_id[text_id]["text"] for text_id in question_text_ids if text_id in text_by_id]
     stem_bbox = _union_bbox([text_by_id[text_id].get("bbox_norm") for text_id in question_text_ids])
     options = []
@@ -363,6 +367,81 @@ def parsed_page_from_compact_response(
     }
 
 
+def _parsed_page_from_question_groups(
+    compact: dict[str, Any],
+    question_groups: list[dict[str, list[str]]],
+    evidence: dict[str, Any],
+    runtime_context: dict[str, Any],
+) -> dict[str, Any]:
+    text_by_id = {str(item.get("text_id")): item for item in evidence.get("texts", []) if item.get("text_id")}
+    option_by_text_id = {
+        str(item.get("text_id")): item
+        for item in evidence.get("option_candidates", [])
+        if item.get("text_id")
+    }
+    questions = []
+    for index, group in enumerate(question_groups, start=1):
+        question_text_ids = _valid_ids(group.get("question_text_ids"), text_by_id)
+        option_text_ids = _valid_ids(group.get("option_text_ids"), option_by_text_id)
+        stem_texts = [text_by_id[text_id]["text"] for text_id in question_text_ids if text_id in text_by_id]
+        options = []
+        for text_id in option_text_ids:
+            source = option_by_text_id[text_id]
+            control_type = str(source.get("control_type") or "unknown")
+            options.append(
+                {
+                    "option_id": text_id,
+                    "text": _clean_option_text(str(source.get("text") or "")),
+                    "raw_text": str(source.get("text") or ""),
+                    "option_type": "text_option",
+                    "selection_control": _selection_control_from_type(
+                        str(compact.get("question_type") or "single_choice"),
+                        control_type,
+                    ),
+                    "control_element_id": str(source.get("control_element_id") or ""),
+                    "control_type": control_type,
+                    "bbox_norm": source.get("text_bbox_norm") or empty_bbox(),
+                    "control_click_point_norm": source.get("control_click_point_norm") or {},
+                }
+            )
+        confidence = _effective_confidence(compact.get("confidence"), bool(stem_texts), bool(options))
+        questions.append(
+            {
+                "question_id": f"q{index}",
+                "question_type": "single_choice",
+                "question_stem": {
+                    "text": " ".join(stem_texts).strip(),
+                    "bbox_norm": _union_bbox([text_by_id[text_id].get("bbox_norm") for text_id in question_text_ids]),
+                },
+                "instructions": [],
+                "answer_options": options,
+                "input_fields": [],
+                "media": [],
+                "matrix": None,
+                "confidence": confidence,
+                "requires_human_review": False,
+            }
+        )
+    confidence = min([question["confidence"] for question in questions] or [0.0])
+    return {
+        "task_id": str(runtime_context.get("task_id") or evidence.get("task_id") or ""),
+        "page": {
+            "page_type": "questionnaire",
+            "language": "en",
+            "page_status": "active_question_page",
+            "confidence": confidence,
+        },
+        "questions": questions,
+        "navigation_buttons": [],
+        "uncertainties": [
+            {
+                "type": "model_format_repair",
+                "message": "Recovered repeated Yes/No question groups from grounded OCR evidence.",
+            }
+        ],
+    }
+
+
 def _normalize_compact_response(compact: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
     if _valid_ids(
         compact.get("option_text_ids"),
@@ -395,6 +474,13 @@ def _normalize_compact_response(compact: dict[str, Any], evidence: dict[str, Any
 
 
 def _infer_yes_no_compact_from_evidence(evidence: dict[str, Any]) -> dict[str, list[str]] | None:
+    groups = _infer_yes_no_question_groups_from_evidence(evidence)
+    if groups:
+        return groups[0]
+    return None
+
+
+def _infer_yes_no_question_groups_from_evidence(evidence: dict[str, Any]) -> list[dict[str, list[str]]]:
     text_by_id = {
         str(item.get("text_id")): item
         for item in evidence.get("texts", [])
@@ -411,20 +497,32 @@ def _infer_yes_no_compact_from_evidence(evidence: dict[str, Any]) -> dict[str, l
         x = _bbox_x(item.get("text_bbox_norm"))
         if y is None or x is None:
             continue
-        candidates.append((str(item.get("text_id") or ""), label, x, y))
+        region_id = _region_for_text_id(text_by_id, str(item.get("text_id") or ""))
+        candidates.append((str(item.get("text_id") or ""), label, x, y, region_id))
     candidates.sort(key=lambda item: (item[3], item[2]))
+    groups = []
+    used_option_ids: set[str] = set()
     for index, left in enumerate(candidates):
         for right in candidates[index + 1 :]:
             if {left[1], right[1]} != {"yes", "no"}:
                 continue
+            if left[4] and right[4] and left[4] != right[4]:
+                continue
             if abs(left[2] - right[2]) > 0.08 or abs(left[3] - right[3]) > 0.08:
                 continue
             option_ids = [left[0], right[0]]
+            if any(text_id in used_option_ids for text_id in option_ids):
+                continue
             option_top = min(left[3], right[3])
             question_ids = _question_ids_before_options(text_by_id, option_ids, option_top)
             if question_ids:
-                return {"question_text_ids": question_ids, "option_text_ids": option_ids}
-    return None
+                used_option_ids.update(option_ids)
+                groups.append({"question_text_ids": question_ids, "option_text_ids": option_ids})
+    return groups
+
+
+def _region_for_text_id(text_by_id: dict[str, dict[str, Any]], text_id: str) -> str:
+    return str((text_by_id.get(text_id) or {}).get("region_id") or "")
 
 
 def _question_ids_before_options(
