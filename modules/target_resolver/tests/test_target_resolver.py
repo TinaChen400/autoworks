@@ -88,6 +88,7 @@ def _orchestrated_parse_with_option_geometry(
     selection_control: str = "radio",
     control_click_point_norm: dict | None = None,
     control_bbox_norm: dict | None = None,
+    control_element_id: str = "",
 ) -> dict:
     option = {
         "option_id": "o1",
@@ -102,6 +103,8 @@ def _orchestrated_parse_with_option_geometry(
         option["control_click_point_norm"] = control_click_point_norm
     if control_bbox_norm is not None:
         option["control_bbox_norm"] = control_bbox_norm
+    if control_element_id:
+        option["control_element_id"] = control_element_id
     return {"parsed_page": {"questions": [{"question_id": "q1", "answer_options": [option]}]}}
 
 
@@ -151,6 +154,27 @@ def _layout_index_with_nearby_visual_control() -> dict:
                 "click_point_raw": {"x": 78, "y": 54},
                 "confidence": 0.45,
             }
+        ],
+        "text_blocks": [],
+        "relationships": [],
+    }
+
+
+def _layout_index_with_competing_nearby_visual_controls() -> dict:
+    return {
+        "elements": [
+            {
+                "element_id": "E_wrong",
+                "element_type_hint": "checkbox_like",
+                "click_point_norm": {"x": 0.392, "y": 0.544},
+                "confidence": 0.9,
+            },
+            {
+                "element_id": "E_right",
+                "element_type_hint": "icon_like",
+                "click_point_norm": {"x": 0.405, "y": 0.565},
+                "confidence": 0.35,
+            },
         ],
         "text_blocks": [],
         "relationships": [],
@@ -370,6 +394,7 @@ def test_radio_option_prefers_nearby_detected_control_over_parsed_control_point(
             bbox_norm={"x": 0.36, "y": 0.55, "width": 0.08, "height": 0.03},
             selection_control="radio",
             control_click_point_norm={"x": 0.405, "y": 0.565},
+            control_element_id="E_right",
         ),
         _layout_index_with_nearby_visual_control(),
         _runtime_context(),
@@ -385,6 +410,67 @@ def test_radio_option_prefers_nearby_detected_control_over_parsed_control_point(
     assert target["click_candidates"][0]["is_primary"] is True
     assert "parsed_control_click_point" in [
         candidate["source"] for candidate in target["click_candidates"]
+    ]
+
+
+def test_radio_option_prefers_matching_control_id_over_higher_confidence_neighbor() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_option", "o1"),
+        _orchestrated_parse_with_option_geometry(
+            click_point_norm={"x": 0.4, "y": 0.565},
+            bbox_norm={"x": 0.36, "y": 0.55, "width": 0.08, "height": 0.03},
+            selection_control="radio",
+            control_click_point_norm={"x": 0.405, "y": 0.565},
+            control_element_id="E_right",
+        ),
+        _layout_index_with_competing_nearby_visual_controls(),
+        _runtime_context(),
+    )
+
+    target = resolved["actions"][0]["target"]
+    assert report["validation_passed"] is True
+    assert target["resolver_source"] == "nearby_detected_control"
+    assert target["control_element_id"] == "E_right"
+    assert target["click_point_norm"] == {"x": 0.405, "y": 0.565}
+    assert target["click_candidates"][0]["control_element_id"] == "E_right"
+
+
+def test_radio_option_filters_controls_above_current_option_row() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_option", "o1"),
+        _orchestrated_parse_with_option_geometry(
+            click_point_norm={"x": 0.4, "y": 0.565},
+            bbox_norm={"x": 0.36, "y": 0.55, "width": 0.08, "height": 0.03},
+            selection_control="radio",
+            control_click_point_norm={"x": 0.405, "y": 0.565},
+            control_element_id="E_right",
+        ),
+        {
+            "elements": [
+                {
+                    "element_id": "E_above",
+                    "element_type_hint": "checkbox_like",
+                    "click_point_norm": {"x": 0.392, "y": 0.532},
+                    "confidence": 0.9,
+                },
+                {
+                    "element_id": "E_right",
+                    "element_type_hint": "icon_like",
+                    "click_point_norm": {"x": 0.405, "y": 0.565},
+                    "confidence": 0.35,
+                },
+            ],
+            "text_blocks": [],
+            "relationships": [],
+        },
+        _runtime_context(),
+    )
+
+    target = resolved["actions"][0]["target"]
+    assert report["validation_passed"] is True
+    assert target["click_candidates"][0]["control_element_id"] == "E_right"
+    assert "E_above" not in [
+        candidate.get("control_element_id") for candidate in target["click_candidates"]
     ]
 
 

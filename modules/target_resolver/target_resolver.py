@@ -181,6 +181,15 @@ def _add_candidate(candidates: list[dict[str, Any]], candidate: dict[str, Any] |
             (existing.get("click_point_raw") or {}).get("y"),
         )
         if existing_key == candidate_key:
+            if (
+                candidate.get("source") == "nearby_detected_control"
+                and existing.get("source") != "nearby_detected_control"
+            ):
+                was_primary = existing.get("is_primary") is True
+                existing.clear()
+                existing.update(candidate)
+                if was_primary:
+                    existing["is_primary"] = True
             return
     candidates.append(candidate)
 
@@ -218,9 +227,10 @@ def _nearby_visual_control_candidates(
     target_y = bbox["y"] + (bbox["height"] * DEFAULT_RADIO_CONTROL_VERTICAL_RATIO)
     min_x = max(0.0, bbox["x"] - max(0.035, bbox["width"] * 0.6))
     max_x = min(1.0, bbox["x"] + bbox["width"] + max(0.02, bbox["width"] * 0.4))
-    min_y = max(0.0, bbox["y"] - max(0.035, bbox["height"] * 0.75))
+    min_y = max(0.0, bbox["y"] - max(0.012, bbox["height"] * 0.4))
     max_y = min(1.0, bbox["y"] + bbox["height"] + max(0.02, bbox["height"] * 0.5))
-    scored: list[tuple[float, dict[str, Any]]] = []
+    option_control_id = str(option.get("control_element_id") or "")
+    scored: list[tuple[int, float, float, dict[str, Any]]] = []
     for element in layout_index.get("elements", []) or []:
         if not isinstance(element, dict):
             continue
@@ -243,9 +253,10 @@ def _nearby_visual_control_candidates(
             hint or "unknown",
         )
         if candidate is not None:
-            scored.append((distance, candidate))
-    scored.sort(key=lambda item: (-float(item[1].get("confidence", 0.0)), item[0]))
-    return [candidate for _distance, candidate in scored[:limit]]
+            exact_control = 0 if option_control_id and str(element.get("element_id") or "") == option_control_id else 1
+            scored.append((exact_control, distance, -float(candidate.get("confidence", 0.0)), candidate))
+    scored.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [candidate for _exact, _distance, _confidence, candidate in scored[:limit]]
 
 
 def _radio_control_point_from_option(option: dict[str, Any]) -> tuple[dict[str, float] | None, str]:
