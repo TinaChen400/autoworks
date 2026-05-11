@@ -284,6 +284,7 @@ def parsed_page_from_compact_response(
     runtime_context: dict[str, Any],
 ) -> dict[str, Any]:
     compact = _extract_json_object(raw_response)
+    compact = _normalize_compact_response(compact, evidence)
     text_by_id = {str(item.get("text_id")): item for item in evidence.get("texts", []) if item.get("text_id")}
     option_by_text_id = {
         str(item.get("text_id")): item
@@ -304,10 +305,12 @@ def parsed_page_from_compact_response(
     for text_id in option_text_ids:
         source = option_by_text_id[text_id]
         control_type = str(source.get("control_type") or "unknown")
+        option_text = _clean_option_text(str(source.get("text") or ""))
         options.append(
             {
                 "option_id": text_id,
-                "text": str(source.get("text") or ""),
+                "text": option_text,
+                "raw_text": str(source.get("text") or ""),
                 "option_type": "text_option",
                 "selection_control": _selection_control_from_type(
                     str(compact.get("question_type") or ""),
@@ -358,6 +361,97 @@ def parsed_page_from_compact_response(
             if isinstance(item, dict) and item.get("type") and item.get("message")
         ],
     }
+
+
+def _normalize_compact_response(compact: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+    if _valid_ids(
+        compact.get("option_text_ids"),
+        {
+            str(item.get("text_id")): item
+            for item in evidence.get("option_candidates", [])
+            if item.get("text_id")
+        },
+    ):
+        return compact
+    inferred = _infer_yes_no_compact_from_evidence(evidence)
+    if not inferred:
+        return compact
+    normalized = dict(compact)
+    normalized.setdefault("page_type", "questionnaire")
+    normalized.setdefault("question_type", "single_choice")
+    normalized.setdefault("confidence", 0.65)
+    normalized.setdefault(
+        "uncertainties",
+        [
+            {
+                "type": "model_format_repair",
+                "message": "Recovered answer ids from grounded OCR evidence after compact response drift.",
+            }
+        ],
+    )
+    normalized["question_text_ids"] = inferred["question_text_ids"]
+    normalized["option_text_ids"] = inferred["option_text_ids"]
+    return normalized
+
+
+def _infer_yes_no_compact_from_evidence(evidence: dict[str, Any]) -> dict[str, list[str]] | None:
+    text_by_id = {
+        str(item.get("text_id")): item
+        for item in evidence.get("texts", [])
+        if isinstance(item, dict) and item.get("text_id")
+    }
+    candidates = []
+    for item in evidence.get("option_candidates", []):
+        if not isinstance(item, dict) or not _looks_like_answer_option(item):
+            continue
+        label = _normalized_yes_no_label(str(item.get("text") or ""))
+        if label not in {"yes", "no"}:
+            continue
+        y = _bbox_y(item.get("text_bbox_norm"))
+        x = _bbox_x(item.get("text_bbox_norm"))
+        if y is None or x is None:
+            continue
+        candidates.append((str(item.get("text_id") or ""), label, x, y))
+    candidates.sort(key=lambda item: (item[3], item[2]))
+    for index, left in enumerate(candidates):
+        for right in candidates[index + 1 :]:
+            if {left[1], right[1]} != {"yes", "no"}:
+                continue
+            if abs(left[2] - right[2]) > 0.08 or abs(left[3] - right[3]) > 0.08:
+                continue
+            option_ids = [left[0], right[0]]
+            option_top = min(left[3], right[3])
+            question_ids = _question_ids_before_options(text_by_id, option_ids, option_top)
+            if question_ids:
+                return {"question_text_ids": question_ids, "option_text_ids": option_ids}
+    return None
+
+
+def _question_ids_before_options(
+    text_by_id: dict[str, dict[str, Any]],
+    option_ids: list[str],
+    option_top: float,
+) -> list[str]:
+    option_regions = {
+        str((text_by_id.get(text_id) or {}).get("region_id") or "")
+        for text_id in option_ids
+    }
+    option_regions.discard("")
+    rows = []
+    for text_id, item in text_by_id.items():
+        if text_id in option_ids:
+            continue
+        if option_regions and str(item.get("region_id") or "") not in option_regions:
+            continue
+        y = _bbox_y(item.get("bbox_norm"))
+        if y is None or y >= option_top or y < option_top - 0.18:
+            continue
+        text = _clean_text(str(item.get("text") or ""))
+        if not text or _normalized_yes_no_label(text) in {"yes", "no"}:
+            continue
+        rows.append((y, text_id))
+    rows.sort()
+    return [text_id for _, text_id in rows[-4:]]
 
 
 def call_ollama(
@@ -423,6 +517,12 @@ def _valid_ids(value: Any, available: dict[str, Any]) -> list[str]:
 
 def _expand_option_ids(selected_ids: list[str], option_by_text_id: dict[str, Any]) -> list[str]:
     if len(selected_ids) < 2:
+        return selected_ids
+    selected_labels = {
+        _normalized_yes_no_label(str((option_by_text_id.get(text_id) or {}).get("text") or ""))
+        for text_id in selected_ids
+    }
+    if selected_labels == {"yes", "no"}:
         return selected_ids
     selected_candidates = [
         option_by_text_id[text_id]
@@ -490,6 +590,26 @@ def _bbox_y(value: Any) -> float | None:
         return float(value["y"])
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _bbox_x(value: Any) -> float | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return float(value["x"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _normalized_yes_no_label(value: str) -> str:
+    text = re.sub(r"[^A-Za-z]+", "", value).casefold()
+    if text in {"yes", "no"}:
+        return text
+    if text in {"oyes", "0yes"}:
+        return "yes"
+    if text in {"ono", "0no"}:
+        return "no"
+    return text
 
 
 def _union_bbox(items: list[Any]) -> dict[str, float]:
@@ -619,6 +739,15 @@ def _validation_error_report(code: str, message: str) -> dict[str, Any]:
 
 def _clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
+
+
+def _clean_option_text(value: str) -> str:
+    normalized = _normalized_yes_no_label(value)
+    if normalized == "yes":
+        return "Yes"
+    if normalized == "no":
+        return "No"
+    return _clean_text(value)
 
 
 def _write_debug(data: dict[str, Any]) -> None:

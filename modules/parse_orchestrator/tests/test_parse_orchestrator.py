@@ -9,6 +9,7 @@ from PIL import Image
 from modules.parse_orchestrator.input_loader import load_layout_index
 from modules.parse_orchestrator.ollama_evidence_parser import (
     build_evidence_payload,
+    parsed_page_from_compact_response,
     run_ollama_evidence_parse,
 )
 from modules.parse_orchestrator.metrics import build_metrics
@@ -125,6 +126,61 @@ def _layout_with_option_evidence(tmp_path: Path) -> dict:
             "target_id": "E2",
             "confidence": 0.7,
         }
+    ]
+    return layout
+
+
+def _layout_with_yes_no_evidence(tmp_path: Path) -> dict:
+    layout = _layout(tmp_path)
+    layout["text_blocks"] = [
+        {
+            "text_id": "T1",
+            "text": "Do you make benefits decisions?",
+            "bbox_norm": {"x": 0.2, "y": 0.3, "width": 0.5, "height": 0.04},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T2",
+            "text": "OYes",
+            "bbox_norm": {"x": 0.22, "y": 0.42, "width": 0.08, "height": 0.04},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T3",
+            "text": "ONo",
+            "bbox_norm": {"x": 0.22, "y": 0.48, "width": 0.08, "height": 0.04},
+            "associated_region_id": "R9",
+        },
+    ]
+    layout["elements"] = [
+        {
+            "element_id": "E2",
+            "region_id": "R9",
+            "element_type_hint": "icon_like",
+            "click_point_norm": {"x": 0.21, "y": 0.43},
+        },
+        {
+            "element_id": "E3",
+            "region_id": "R9",
+            "element_type_hint": "icon_like",
+            "click_point_norm": {"x": 0.21, "y": 0.49},
+        },
+    ]
+    layout["relationships"] = [
+        {
+            "relationship_id": "REL1",
+            "relationship_type": "nearby_text",
+            "source_id": "T2",
+            "target_id": "E2",
+            "confidence": 0.35,
+        },
+        {
+            "relationship_id": "REL2",
+            "relationship_type": "nearby_text",
+            "source_id": "T3",
+            "target_id": "E3",
+            "confidence": 0.35,
+        },
     ]
     return layout
 
@@ -323,6 +379,36 @@ def test_ollama_evidence_parse_returns_grounded_parsed_page(
     assert result.model_calls_count == 1
     assert result.parsed_page["metadata"]["source"] == "ollama_evidence_parse"
     assert result.parsed_page["questions"][0]["answer_options"][0]["control_element_id"] == "E2"
+
+
+def test_ollama_evidence_parse_repairs_yes_no_response_drift(tmp_path: Path) -> None:
+    layout = _layout_with_yes_no_evidence(tmp_path)
+    evidence = build_evidence_payload(
+        layout,
+        _runtime_context(tmp_path),
+        _config(),
+        {"selected_region_ids": ["R9"]},
+    )
+
+    parsed = parsed_page_from_compact_response(
+        json.dumps(
+            {
+                "texts_and_elements": [
+                    {"text": "Do you make benefits decisions?", "element_id": "E1"},
+                    {"text": "OYes", "element_id": "E2"},
+                    {"text": "ONo", "element_id": "E3"},
+                ]
+            }
+        ),
+        evidence,
+        _runtime_context(tmp_path),
+    )
+
+    question = parsed["questions"][0]
+    assert question["question_stem"]["text"] == "Do you make benefits decisions?"
+    assert [option["option_id"] for option in question["answer_options"]] == ["T2", "T3"]
+    assert [option["text"] for option in question["answer_options"]] == ["Yes", "No"]
+    assert [option["raw_text"] for option in question["answer_options"]] == ["OYes", "ONo"]
 
 
 def test_orchestrator_uses_ollama_evidence_mode(

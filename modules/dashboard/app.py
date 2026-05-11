@@ -885,6 +885,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "preview",
                     "--parser-mode",
                     "ollama",
+                    "--ocr",
+                    "rapidocr",
                 ]
                 self.run_dashboard_command(command)
                 self.redirect_home()
