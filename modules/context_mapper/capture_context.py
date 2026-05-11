@@ -22,6 +22,7 @@ from modules.window_capture.capture import (
 
 DEFAULT_RUNTIME_STATE_DIR = PROJECT_ROOT / "runtime_state"
 DEFAULT_RUNTIME_CONTEXT_PATH = DEFAULT_RUNTIME_STATE_DIR / "latest_runtime_context.json"
+DEFAULT_CAPTURE_PROVENANCE_PATH = DEFAULT_RUNTIME_STATE_DIR / "latest_capture_provenance.json"
 
 
 def build_runtime_context(
@@ -31,7 +32,10 @@ def build_runtime_context(
 ) -> dict[str, Any]:
     task_context = load_effective_task_context(task_id)
     anchor_profile = ensure_anchor_profile(DEFAULT_CONFIG_PATH)
-    anchor_data = resolve_anchor_frame(anchor_profile)
+    anchor_data = (
+        anchor_frame_from_capture_provenance(screenshot_path)
+        or resolve_anchor_frame(anchor_profile)
+    )
     anchor = AnchorFrame(**anchor_data)
     anchor.validate()
 
@@ -72,6 +76,42 @@ def build_runtime_context(
     data = runtime_context.to_json_dict()
     output_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return data
+
+
+def anchor_frame_from_capture_provenance(screenshot_path: Path) -> dict[str, int] | None:
+    if not DEFAULT_CAPTURE_PROVENANCE_PATH.exists():
+        return None
+    try:
+        provenance = json.loads(DEFAULT_CAPTURE_PROVENANCE_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    referenced = Path(
+        str(provenance.get("screenshot_path") or provenance.get("capture_path") or "")
+    )
+    try:
+        if referenced.resolve() != screenshot_path.resolve():
+            return None
+    except OSError:
+        return None
+
+    capture_region = (
+        provenance.get("capture_region")
+        or provenance.get("locked_region")
+        or provenance.get("bbox")
+        or {}
+    )
+    if not isinstance(capture_region, dict):
+        return None
+    try:
+        return {
+            "x": int(capture_region["left"]),
+            "y": int(capture_region["top"]),
+            "width": int(capture_region["width"]),
+            "height": int(capture_region["height"]),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def read_image_size_or_anchor(screenshot_path: Path, anchor: AnchorFrame) -> ImageSize:

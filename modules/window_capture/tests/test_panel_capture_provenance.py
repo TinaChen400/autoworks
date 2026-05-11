@@ -8,18 +8,20 @@ from modules.window_capture.panel import build_capture_provenance
 from modules.window_capture.window_controller import WindowPlacement
 
 
-def test_build_capture_provenance_uses_current_image_and_locked_region(tmp_path: Path) -> None:
+def test_build_capture_provenance_uses_capture_region_as_coordinate_frame(
+    tmp_path: Path,
+) -> None:
     capture = tmp_path / "latest_capture.png"
-    Image.new("RGB", (1600, 900), "white").save(capture)
-    locked_region = WindowPlacement(left=100, top=80, width=1600, height=900)
+    Image.new("RGB", (1920, 1080), "white").save(capture)
+    target_window_rect = WindowPlacement(left=100, top=80, width=1440, height=1080)
 
     provenance = build_capture_provenance(
         output_path=capture,
-        capture_target={"x": 100, "y": 80, "width": 1600, "height": 900},
-        locked_target=locked_region,
+        capture_target={"x": 100, "y": 80, "width": 1920, "height": 1080},
+        locked_target=target_window_rect,
         target_window_handle=123,
         target_window_title="Tina",
-        dpi_scale=1.25,
+        dpi_scale=1.5,
     )
 
     assert provenance["capture_source"] == "locked_target"
@@ -29,10 +31,18 @@ def test_build_capture_provenance_uses_current_image_and_locked_region(tmp_path:
     assert provenance["locked_region"] == {
         "left": 100,
         "top": 80,
-        "width": 1600,
-        "height": 900,
+        "width": 1920,
+        "height": 1080,
     }
-    assert provenance["image_width"] == 1600
-    assert provenance["image_height"] == 900
+    assert provenance["capture_region"] == provenance["locked_region"]
+    assert provenance["bbox"] == provenance["locked_region"]
+    assert provenance["target_window_rect"] == {
+        "left": 100,
+        "top": 80,
+        "width": 1440,
+        "height": 1080,
+    }
+    assert provenance["image_width"] == 1920
+    assert provenance["image_height"] == 1080
     assert provenance["image_hash"]
     assert provenance["screenshot_path"] == str(capture)

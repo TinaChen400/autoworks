@@ -9,7 +9,7 @@ from typing import Any
 import mss
 from PIL import Image
 
-from modules.window_capture.capture import PROJECT_ROOT, ensure_anchor_profile
+from modules.window_capture.capture import PROJECT_ROOT, ensure_anchor_profile, resolve_anchor_frame
 from modules.window_capture.target_profile import (
     describe_profile_match,
     find_matching_window,
@@ -19,7 +19,7 @@ from modules.window_capture.window_controller import (
     WindowPlacement,
     get_window_placement,
     is_valid_window,
-    restore_if_moved_or_resized,
+    move_resize_window,
     snap_to_anchor,
 )
 from modules.window_capture.window_locator import WindowInfo, list_visible_windows
@@ -70,6 +70,87 @@ def placement_from_dict(payload: dict[str, Any]) -> WindowPlacement:
     )
 
 
+def anchor_frame_to_placement(payload: dict[str, Any]) -> WindowPlacement:
+    return WindowPlacement(
+        left=int(payload["x"]),
+        top=int(payload["y"]),
+        width=int(payload["width"]),
+        height=int(payload["height"]),
+    )
+
+
+def placement_to_anchor_frame(placement: WindowPlacement) -> dict[str, int]:
+    return {
+        "x": placement.left,
+        "y": placement.top,
+        "width": placement.width,
+        "height": placement.height,
+    }
+
+
+def capture_region_from_target(payload: dict[str, Any]) -> WindowPlacement:
+    region_payload = (
+        payload.get("capture_region")
+        or payload.get("locked_region")
+        or payload.get("bbox")
+        or {}
+    )
+    return placement_from_dict(region_payload)
+
+
+def window_origin_is_aligned(
+    window_rect: WindowPlacement,
+    capture_region: WindowPlacement,
+    *,
+    tolerance_px: int = 8,
+) -> bool:
+    return (
+        abs(window_rect.left - capture_region.left) <= tolerance_px
+        and abs(window_rect.top - capture_region.top) <= tolerance_px
+    )
+
+
+def realign_window_origin(hwnd: int, capture_region: WindowPlacement) -> WindowPlacement:
+    current = get_window_placement(hwnd)
+    if window_origin_is_aligned(current, capture_region):
+        return current
+    move_resize_window(
+        hwnd,
+        WindowPlacement(
+            left=capture_region.left,
+            top=capture_region.top,
+            width=current.width,
+            height=current.height,
+        ),
+    )
+    return get_window_placement(hwnd)
+
+
+def locked_target_payload(
+    *,
+    matched: WindowInfo,
+    capture_region: WindowPlacement,
+    target_window_rect: WindowPlacement,
+    dpi_scale: Any,
+) -> dict[str, Any]:
+    capture_region_dict = placement_to_dict(capture_region)
+    return {
+        "target_locked": True,
+        "created_at": utc_now_iso(),
+        "capture_source": "locked_target",
+        "target_window_title": matched.title,
+        "target_window_handle": matched.hwnd,
+        "target_window_class": matched.class_name,
+        "capture_region": capture_region_dict,
+        "anchor_frame": placement_to_anchor_frame(capture_region),
+        "locked_region": capture_region_dict,
+        "bbox": capture_region_dict,
+        "target_window_rect": placement_to_dict(target_window_rect),
+        "dpi_scale": dpi_scale,
+        "errors": [],
+    }
+
+
 def window_to_dict(window: WindowInfo) -> dict[str, Any]:
     return {
         "hwnd": window.hwnd,
@@ -117,19 +198,15 @@ def lock_saved_target(runtime_state_dir: Path = RUNTIME_STATE_DIR) -> dict[str, 
         return payload
 
     anchor = ensure_anchor_profile()
-    locked_region = snap_to_anchor(matched.hwnd, anchor)
-    payload = {
-        "target_locked": True,
-        "created_at": utc_now_iso(),
-        "capture_source": "locked_target",
-        "target_window_title": matched.title,
-        "target_window_handle": matched.hwnd,
-        "target_window_class": matched.class_name,
-        "locked_region": placement_to_dict(locked_region),
-        "bbox": placement_to_dict(locked_region),
-        "dpi_scale": anchor.get("scale"),
-        "errors": [],
-    }
+    snap_to_anchor(matched.hwnd, anchor)
+    capture_region = anchor_frame_to_placement(resolve_anchor_frame(anchor))
+    target_window_rect = realign_window_origin(matched.hwnd, capture_region)
+    payload = locked_target_payload(
+        matched=matched,
+        capture_region=capture_region,
+        target_window_rect=target_window_rect,
+        dpi_scale=anchor.get("scale"),
+    )
     write_json(runtime_state_dir / LOCKED_TARGET_PATH.name, payload)
     return payload
 
@@ -151,24 +228,22 @@ def lock_target_by_handle(
         return payload
 
     anchor = ensure_anchor_profile()
-    locked_region = snap_to_anchor(matched.hwnd, anchor)
-    payload = {
-        "target_locked": True,
-        "created_at": utc_now_iso(),
-        "capture_source": "locked_target",
-        "target_window_title": matched.title,
-        "target_window_handle": matched.hwnd,
-        "target_window_class": matched.class_name,
-        "locked_region": placement_to_dict(locked_region),
-        "bbox": placement_to_dict(locked_region),
-        "dpi_scale": anchor.get("scale"),
-        "errors": [],
-    }
+    snap_to_anchor(matched.hwnd, anchor)
+    capture_region = anchor_frame_to_placement(resolve_anchor_frame(anchor))
+    target_window_rect = realign_window_origin(matched.hwnd, capture_region)
+    payload = locked_target_payload(
+        matched=matched,
+        capture_region=capture_region,
+        target_window_rect=target_window_rect,
+        dpi_scale=anchor.get("scale"),
+    )
     write_json(runtime_state_dir / LOCKED_TARGET_PATH.name, payload)
     return payload
 
 
-def validate_locked_target(runtime_state_dir: Path = RUNTIME_STATE_DIR) -> tuple[bool, dict[str, Any], str]:
+def validate_locked_target(
+    runtime_state_dir: Path = RUNTIME_STATE_DIR,
+) -> tuple[bool, dict[str, Any], str]:
     payload = read_json(runtime_state_dir / LOCKED_TARGET_PATH.name)
     if payload.get("target_locked") is not True:
         return False, payload, NO_LOCKED_TARGET_MESSAGE
@@ -177,15 +252,13 @@ def validate_locked_target(runtime_state_dir: Path = RUNTIME_STATE_DIR) -> tuple
     if not is_valid_window(hwnd):
         return False, payload, NO_LOCKED_TARGET_MESSAGE
 
-    region_payload = payload.get("locked_region") or payload.get("bbox") or {}
     try:
-        locked_region = placement_from_dict(region_payload)
+        capture_region = capture_region_from_target(payload)
     except (KeyError, TypeError, ValueError):
         return False, payload, NO_LOCKED_TARGET_MESSAGE
 
-    restore_if_moved_or_resized(hwnd, locked_region)
-    current = get_window_placement(hwnd)
-    if current != locked_region:
+    current = realign_window_origin(hwnd, capture_region)
+    if not window_origin_is_aligned(current, capture_region):
         return False, payload, NO_LOCKED_TARGET_MESSAGE
 
     return True, payload, ""
@@ -209,7 +282,11 @@ def capture_locked_target(
         raise RuntimeError(reason)
 
     output = output_path or runtime_state_dir / "latest_capture.png"
-    region = placement_from_dict(target.get("locked_region") or target.get("bbox") or {})
+    region = capture_region_from_target(target)
+    target_window_rect = None
+    hwnd = int(target.get("target_window_handle") or 0)
+    if is_valid_window(hwnd):
+        target_window_rect = get_window_placement(hwnd)
     monitor = {
         "left": region.left,
         "top": region.top,
@@ -231,8 +308,13 @@ def capture_locked_target(
         "target_locked": True,
         "target_window_title": target.get("target_window_title", ""),
         "target_window_handle": target.get("target_window_handle"),
+        "capture_region": placement_to_dict(region),
+        "anchor_frame": placement_to_anchor_frame(region),
         "locked_region": placement_to_dict(region),
         "bbox": placement_to_dict(region),
+        "target_window_rect": (
+            placement_to_dict(target_window_rect) if target_window_rect is not None else {}
+        ),
         "dpi_scale": target.get("dpi_scale"),
         "screenshot_path": str(output),
         "screenshot_mtime": datetime.fromtimestamp(output.stat().st_mtime).isoformat(),
