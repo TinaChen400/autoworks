@@ -271,7 +271,108 @@ def test_render_dashboard_shows_click_point_and_real_click_is_separate(tmp_path:
     html = render_dashboard(tmp_path)
 
     assert "Run Dry-Run Executor" in html
-    assert "Real Click Once" in html
+    assert "Real Click 1 Action" in html
     assert "/run-real-click-once" in html
     assert "parsed_control_click_point" in html
     assert "{&#x27;x&#x27;: 747, &#x27;y&#x27;: 802}" in html
+
+
+def test_render_dashboard_shows_multi_action_real_click_results(tmp_path: Path) -> None:
+    write_ready_chain(tmp_path)
+    write_json(
+        tmp_path / "latest_orchestrated_parse.json",
+        {
+            "requires_human_review": False,
+            "parsed_page": {
+                "questions": [{"question_id": "q1"}, {"question_id": "q2"}],
+            },
+        },
+    )
+    write_json(
+        tmp_path / "latest_execution_gate.json",
+        {
+            "status": "allowed",
+            "execution_allowed": True,
+            "source_resolved_action_plan_id": "resolved_action_plan_1",
+            "block_reasons": [],
+            "executable_actions": [
+                {
+                    "action_id": "a1",
+                    "skill": "click_option",
+                    "target": {
+                        "question_id": "q1",
+                        "option_id": "T32",
+                        "option_text": "No",
+                        "resolver_source": "parsed_option_click_point",
+                        "resolver_confidence": 0.82,
+                        "click_point_screen": {"x": 889, "y": 683},
+                    },
+                },
+                {
+                    "action_id": "a2",
+                    "skill": "click_option",
+                    "target": {
+                        "question_id": "q2",
+                        "option_id": "T43",
+                        "option_text": "No",
+                        "resolver_source": "parsed_option_click_point",
+                        "resolver_confidence": 0.82,
+                        "click_point_screen": {"x": 890, "y": 1008},
+                    },
+                },
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "latest_action_executor_run.json",
+        {
+            "status": "completed",
+            "validation_passed": True,
+            "action_records": [
+                {
+                    "action_id": "a1",
+                    "question_id": "q1",
+                    "option_id": "T32",
+                    "option_text": "No",
+                    "click_point_screen": {"x": 889, "y": 683},
+                    "status": "clicked_verified",
+                    "verified_candidate_index": 0,
+                    "verification": {"status": "selected"},
+                    "click_attempts": [{"candidate_index": 0}],
+                },
+                {
+                    "action_id": "a2",
+                    "question_id": "q2",
+                    "option_id": "T43",
+                    "option_text": "No",
+                    "click_point_screen": {"x": 890, "y": 1008},
+                    "status": "clicked_verified",
+                    "verified_candidate_index": 0,
+                    "verification": {"status": "selected"},
+                    "click_attempts": [{"candidate_index": 0}],
+                },
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "latest_action_executor_report.json",
+        {
+            "validation_passed": True,
+            "real_execution": True,
+            "execution_attempted": True,
+            "executed_action_count": 2,
+        },
+    )
+
+    summary = build_runtime_summary(tmp_path)
+    html = render_dashboard(tmp_path)
+
+    assert summary["counts"]["questions"] == 2
+    assert summary["counts"]["executable_actions"] == 2
+    assert summary["counts"]["executor_records"] == 2
+    assert "Real Click 2 Actions" in html
+    assert "Action Review" in html
+    assert "Executable Actions" in html
+    assert "Real-click Results" in html
+    assert "clicked_verified" in html
+    assert "{&#x27;x&#x27;: 890, &#x27;y&#x27;: 1008}" in html

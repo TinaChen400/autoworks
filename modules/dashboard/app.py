@@ -74,6 +74,52 @@ def action_target(action: dict[str, Any]) -> dict[str, Any]:
     return target if isinstance(target, dict) else {}
 
 
+def action_rows(actions: list[Any]) -> list[dict[str, Any]]:
+    rows = []
+    for index, action in enumerate(actions, start=1):
+        if not isinstance(action, dict):
+            continue
+        target = action_target(action)
+        rows.append(
+            {
+                "index": index,
+                "action_id": action.get("action_id", ""),
+                "skill": action.get("skill", ""),
+                "question_id": target.get("question_id", action.get("question_id", "")),
+                "option_id": target.get("option_id", action.get("option_id", "")),
+                "option_text": target.get("option_text", action.get("option_text", "")),
+                "resolver_source": target.get("resolver_source", ""),
+                "resolver_confidence": target.get("resolver_confidence", ""),
+                "click_point_screen": target.get("click_point_screen", action.get("click_point_screen", "")),
+                "candidate_count": len(target.get("click_candidates", []) or []),
+                "requires_review": action.get("requires_review", ""),
+            }
+        )
+    return rows
+
+
+def executor_rows(executor_run: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = []
+    for index, record in enumerate(executor_run.get("action_records", []) or [], start=1):
+        if not isinstance(record, dict):
+            continue
+        rows.append(
+            {
+                "index": index,
+                "action_id": record.get("action_id", ""),
+                "question_id": record.get("question_id", ""),
+                "option_id": record.get("option_id", ""),
+                "option_text": record.get("option_text", ""),
+                "click_point_screen": record.get("click_point_screen", ""),
+                "status": record.get("status", ""),
+                "verified_candidate_index": record.get("verified_candidate_index", ""),
+                "verification": (record.get("verification") or {}).get("status", ""),
+                "attempt_count": len(record.get("click_attempts", []) or []),
+            }
+        )
+    return rows
+
+
 def bool_ok(value: Any) -> bool:
     return value is True
 
@@ -136,6 +182,13 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     gate = read_json(runtime_state_dir / "latest_execution_gate.json")
     executor_report = read_json(runtime_state_dir / "latest_action_executor_report.json")
     executor_run = read_json(runtime_state_dir / "latest_action_executor_run.json")
+    questions = (orchestrated_parse.get("parsed_page") or {}).get("questions", [])
+    question_count = len(questions) if isinstance(questions, list) else 0
+    decision_count = len(decision.get("question_decisions", []) or [])
+    planned_actions = action_rows(action_plan.get("actions", []) or [])
+    resolved_actions = action_rows(resolved_plan.get("actions", []) or [])
+    executable_actions = action_rows(gate.get("executable_actions", []) or [])
+    executor_records = executor_rows(executor_run)
 
     qd = first_question_decision(decision)
     resolved_action = first_action(resolved_plan)
@@ -337,6 +390,20 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
             "execution_attempted": executor_report.get("execution_attempted", ""),
             "executed_action_count": executor_report.get("executed_action_count", ""),
             "dry_run_ok": executor_dry_run_ok,
+        },
+        "counts": {
+            "questions": question_count,
+            "decisions": decision_count,
+            "planned_actions": len(planned_actions),
+            "resolved_actions": len(resolved_actions),
+            "executable_actions": len(executable_actions),
+            "executor_records": len(executor_records),
+        },
+        "actions": {
+            "planned": planned_actions,
+            "resolved": resolved_actions,
+            "executable": executable_actions,
+            "executor_records": executor_records,
         },
         "can_run": {
             "parse": (runtime_state_dir / "latest_runtime_context.json").exists()
@@ -550,6 +617,10 @@ def render_dashboard(runtime_state_dir: Path = RUNTIME_STATE_DIR) -> str:
       <h2>Run Summary</h2>
       {render_run_summary(summary)}
     </section>
+    <section class="wide">
+      <h2>Action Review</h2>
+      {render_action_review(summary)}
+    </section>
     <section>
       <h2>Errors and Warnings</h2>
       {render_messages("Errors", errors)}
@@ -585,6 +656,12 @@ def render_dashboard(runtime_state_dir: Path = RUNTIME_STATE_DIR) -> str:
 def render_controls(target_locked: bool, summary: dict[str, Any]) -> str:
     run_disabled = "" if target_locked else " disabled"
     can_run = summary.get("can_run", {})
+    executable_count = int((summary.get("counts") or {}).get("executable_actions") or 0)
+    real_click_label = (
+        f"Real Click {executable_count} Action"
+        if executable_count == 1
+        else f"Real Click {executable_count} Actions"
+    )
     controls = [
         '<form method="post" action="/snap-target"><button>Snap Target</button></form>',
         '<form method="post" action="/capture-locked"><button>Capture Locked Window</button></form>',
@@ -609,7 +686,7 @@ def render_controls(target_locked: bool, summary: dict[str, Any]) -> str:
         ),
         control_form(
             "/run-real-click-once",
-            "Real Click Once",
+            real_click_label,
             can_run.get("real_click") and target_locked,
             "danger",
         ),
@@ -665,6 +742,81 @@ def render_run_summary(summary: dict[str, Any]) -> str:
     return (
         "<table><thead><tr><th>Step</th><th>Status</th><th>Details</th><th>Stop Reason</th>"
         "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
+def render_action_review(summary: dict[str, Any]) -> str:
+    counts = summary.get("counts", {})
+    actions = summary.get("actions", {})
+    header = (
+        '<p class="muted">'
+        f"Questions: {escape(counts.get('questions', 0))} | "
+        f"Decisions: {escape(counts.get('decisions', 0))} | "
+        f"Resolved actions: {escape(counts.get('resolved_actions', 0))} | "
+        f"Executable actions: {escape(counts.get('executable_actions', 0))} | "
+        f"Executor records: {escape(counts.get('executor_records', 0))}"
+        "</p>"
+    )
+    return (
+        header
+        + render_action_table("Executable Actions", actions.get("executable", []))
+        + render_executor_table(actions.get("executor_records", []))
+    )
+
+
+def render_action_table(label: str, rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return f'<p class="muted">{escape(label)}: none</p>'
+    body = []
+    for row in rows:
+        body.append(
+            "<tr>"
+            f"<td>{escape(row.get('index', ''))}</td>"
+            f"<td>{escape(row.get('action_id', ''))}</td>"
+            f"<td>{escape(row.get('question_id', ''))}</td>"
+            f"<td>{escape(row.get('option_id', ''))}</td>"
+            f"<td>{escape(row.get('option_text', ''))}</td>"
+            f"<td>{escape(row.get('click_point_screen', ''))}</td>"
+            f"<td>{escape(row.get('resolver_source', ''))}</td>"
+            f"<td>{escape(row.get('resolver_confidence', ''))}</td>"
+            "</tr>"
+        )
+    return (
+        f"<p>{escape(label)}</p>"
+        "<table><thead><tr><th>#</th><th>Action</th><th>Question</th><th>Option</th>"
+        "<th>Text</th><th>Click point</th><th>Resolver</th><th>Confidence</th>"
+        "</tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
+def render_executor_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return '<p class="muted">Real-click results: none</p>'
+    body = []
+    for row in rows:
+        status = str(row.get("status", ""))
+        body.append(
+            "<tr>"
+            f"<td>{escape(row.get('index', ''))}</td>"
+            f"<td>{escape(row.get('action_id', ''))}</td>"
+            f"<td>{escape(row.get('question_id', ''))}</td>"
+            f"<td>{escape(row.get('option_text', ''))}</td>"
+            f"<td>{escape(row.get('click_point_screen', ''))}</td>"
+            f"<td style=\"color:{status_color(status)}\">{escape(status)}</td>"
+            f"<td>{escape(row.get('verified_candidate_index', ''))}</td>"
+            f"<td>{escape(row.get('verification', ''))}</td>"
+            f"<td>{escape(row.get('attempt_count', ''))}</td>"
+            "</tr>"
+        )
+    return (
+        "<p>Real-click Results</p>"
+        "<table><thead><tr><th>#</th><th>Action</th><th>Question</th><th>Text</th>"
+        "<th>Click point</th><th>Status</th><th>Verified candidate</th>"
+        "<th>Verification</th><th>Attempts</th></tr></thead><tbody>"
         + "".join(body)
         + "</tbody></table>"
     )
