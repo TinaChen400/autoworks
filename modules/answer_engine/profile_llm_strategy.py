@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .ollama_answer_client import call_ollama_answerer, extract_json_object
@@ -147,14 +148,17 @@ def build_prompt(
     config: dict[str, Any],
     answer_mode: str,
 ) -> str:
+    _ = session
     payload = {
         "answer_mode": answer_mode,
         "user_profile": profile,
-        "session_memory": _compact_session(session),
+        "current_page_only": True,
         "answer_policy": {
             "answer_as_user": True,
             "do_not_invent_private_facts": True,
             "strict_private_requires_profile_evidence": True,
+            "do_not_use_prior_page_memory": True,
+            "option_ids_are_current_page_only": True,
             "representative_persona_may_answer_low_risk_questions": True,
             "professional_judgement_may_use_allowed_professional_range": True,
             "tone": config.get("answer_tone", "honest, concise, natural"),
@@ -179,7 +183,8 @@ def build_prompt(
         "You answer survey/form questions according to answer_mode. Return ONLY valid JSON. "
         "For representative_persona, answer as a plausible mainstream practical consumer using the provided principles. "
         "For professional_judgement, answer from the allowed professional range without claiming named employers, universities, or institutions. "
-        "For strict_private, use only explicit true_profile_facts/session evidence; otherwise require human review. "
+        "For strict_private, use only explicit user_profile evidence; otherwise require human review. "
+        "Use only the current question and current answer_options. Do not use prior page memory, old option IDs, or session history. "
         "Do not invent private facts, credentials, exact addresses, named institutions, or medical/financial details.\n\n"
         "Return this shape:\n"
         "{\"answer_mode\":\"representative_persona|professional_judgement|strict_private\","
@@ -220,6 +225,14 @@ def decision_from_response(
     basis = str(response.get("basis") or "").strip()
     requires_review = bool(response.get("requires_human_review", True))
     human_review_reason = str(response.get("human_review_reason") or "")
+    stale_references = _stale_option_references(response, options_by_id)
+    if stale_references:
+        requires_review = True
+        human_review_reason = (
+            human_review_reason
+            or "Profile LLM referenced option IDs that are not present on the current page."
+        )
+        selected_ids = []
     if answer_mode == "strict_private" and category in PERSONAL_CATEGORIES and not evidence:
         requires_review = True
         human_review_reason = human_review_reason or "Profile LLM answer has no supporting evidence."
@@ -252,6 +265,10 @@ def decision_from_response(
     )
     decision["answer_mode"] = answer_mode
     decision["basis"] = basis
+    if stale_references:
+        decision.setdefault("warnings", []).append(
+            "Profile LLM referenced non-current option IDs: " + ", ".join(stale_references)
+        )
     return decision
 
 
@@ -275,6 +292,8 @@ def _evidence(value: Any) -> list[dict[str, Any]]:
             continue
         source = str(item.get("source") or "").strip()
         evidence_value = str(item.get("value") or "").strip()
+        if source == "session_memory" or source.startswith("session."):
+            continue
         if source and evidence_value:
             result.append(
                 {
@@ -287,6 +306,36 @@ def _evidence(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _stale_option_references(response: dict[str, Any], options_by_id: dict[str, dict[str, Any]]) -> list[str]:
+    current_ids = set(options_by_id)
+    text_parts = [
+        str(response.get("reason") or ""),
+        str(response.get("basis") or ""),
+    ]
+    for item in response.get("evidence", []) if isinstance(response.get("evidence"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        text_parts.extend(
+            [
+                str(item.get("value") or ""),
+                str(item.get("matched_text") or ""),
+            ]
+        )
+    text = " ".join(text_parts)
+    prefixes = {
+        match.group(1)
+        for option_id in current_ids
+        for match in [re.match(r"^([A-Za-z]{1,3})\d+$", option_id)]
+        if match
+    }
+    if not prefixes:
+        return []
+    referenced = set()
+    for prefix in prefixes:
+        referenced.update(re.findall(rf"\b{re.escape(prefix)}\d+\b", text))
+    return sorted(option_id for option_id in referenced if option_id not in current_ids)
+
+
 def _confidence(value: Any) -> float:
     try:
         return round(max(0.0, min(1.0, float(value))), 3)
@@ -297,13 +346,3 @@ def _confidence(value: Any) -> float:
 def _answer_mode(value: Any, default: str) -> str:
     answer_mode = str(value or default)
     return answer_mode if answer_mode in ANSWER_MODES else default
-
-
-def _compact_session(session: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(session, dict):
-        return {}
-    return {
-        "session_id": session.get("session_id", ""),
-        "current_page_index": session.get("current_page_index", 0),
-        "consistency_memory": session.get("consistency_memory", []),
-    }
