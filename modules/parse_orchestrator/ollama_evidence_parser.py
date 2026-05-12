@@ -191,10 +191,6 @@ def build_evidence_payload(
         element_id = str(relationship.get("target_id") or "")
         if text_id not in text_by_id or element_id not in element_by_id:
             continue
-        text_region = str(text_by_id[text_id].get("associated_region_id") or "")
-        element_region = str(element_by_id[element_id].get("region_id") or "")
-        if selected_region_ids and text_region not in selected_region_ids and element_region not in selected_region_ids:
-            continue
         pair = (text_id, element_id)
         if pair in seen_pairs:
             continue
@@ -228,10 +224,6 @@ def build_evidence_payload(
         }
         for text_id, text in text_by_id.items()
         if _clean_text(str(text.get("text") or ""))
-        and (
-            not selected_region_ids
-            or str(text.get("associated_region_id") or "") in selected_region_ids
-        )
     ]
     text_rows.sort(key=lambda item: (float((item["bbox_norm"] or {}).get("y") or 0.0), float((item["bbox_norm"] or {}).get("x") or 0.0)))
     return {
@@ -454,6 +446,8 @@ def _normalize_compact_response(compact: dict[str, Any], evidence: dict[str, Any
         return compact
     inferred = _infer_yes_no_compact_from_evidence(evidence)
     if not inferred:
+        inferred = _infer_single_choice_compact_from_evidence(evidence)
+    if not inferred:
         return compact
     normalized = dict(compact)
     normalized.setdefault("page_type", "questionnaire")
@@ -478,6 +472,42 @@ def _infer_yes_no_compact_from_evidence(evidence: dict[str, Any]) -> dict[str, l
     if groups:
         return groups[0]
     return None
+
+
+def _infer_single_choice_compact_from_evidence(evidence: dict[str, Any]) -> dict[str, list[str]] | None:
+    text_by_id = {
+        str(item.get("text_id")): item
+        for item in evidence.get("texts", [])
+        if isinstance(item, dict) and item.get("text_id")
+    }
+    option_by_text_id = {
+        str(item.get("text_id")): item
+        for item in evidence.get("option_candidates", [])
+        if isinstance(item, dict) and item.get("text_id")
+    }
+    candidates = []
+    for text_id, item in option_by_text_id.items():
+        if text_id not in text_by_id or not _looks_like_single_choice_option_candidate(item):
+            continue
+        y = _bbox_y(item.get("text_bbox_norm"))
+        x = _bbox_x(item.get("text_bbox_norm"))
+        if y is None or x is None:
+            continue
+        width = _bbox_width(item.get("text_bbox_norm")) or 0.0
+        candidates.append((y, x, width, text_id))
+    candidates = _remove_concept_body_candidates(candidates, text_by_id, option_by_text_id)
+    option_ids = _best_vertical_choice_group(candidates)
+    if len(option_ids) < 2:
+        return None
+
+    option_top = min(
+        _bbox_y((option_by_text_id.get(text_id) or {}).get("text_bbox_norm")) or 1.0
+        for text_id in option_ids
+    )
+    question_ids = _single_choice_question_ids_before_options(text_by_id, option_ids, option_top)
+    if not question_ids:
+        return None
+    return {"question_text_ids": question_ids, "option_text_ids": option_ids}
 
 
 def _infer_yes_no_question_groups_from_evidence(evidence: dict[str, Any]) -> list[dict[str, list[str]]]:
@@ -550,6 +580,102 @@ def _question_ids_before_options(
         rows.append((y, text_id))
     rows.sort()
     return [text_id for _, text_id in rows[-4:]]
+
+
+def _single_choice_question_ids_before_options(
+    text_by_id: dict[str, dict[str, Any]],
+    option_ids: list[str],
+    first_option_top: float,
+) -> list[str]:
+    rows = []
+    for text_id, item in text_by_id.items():
+        if text_id in option_ids:
+            continue
+        y = _bbox_y(item.get("bbox_norm"))
+        if y is None or y >= first_option_top or y < first_option_top - 0.28:
+            continue
+        text = str(item.get("text") or "")
+        if _looks_like_question_context_text(text):
+            rows.append((y, text_id))
+    rows.sort()
+    return [text_id for _, text_id in rows[-4:]]
+
+
+def _best_vertical_choice_group(candidates: list[tuple[float, float, float, str]]) -> list[str]:
+    if len(candidates) < 2:
+        return []
+    candidates = sorted(candidates)
+    best: list[tuple[float, float, float, str]] = []
+    for start_index, start in enumerate(candidates):
+        group = [start]
+        expected_x = start[1]
+        previous_y = start[0]
+        for candidate in candidates[start_index + 1 :]:
+            y, x, _width, text_id = candidate
+            if y - previous_y > 0.12:
+                break
+            if abs(x - expected_x) > 0.08:
+                continue
+            if text_id in {item[3] for item in group}:
+                continue
+            group.append(candidate)
+            previous_y = y
+            expected_x = sum(item[1] for item in group) / len(group)
+        if _vertical_group_score(group) > _vertical_group_score(best):
+            best = group
+    if len(best) < 2:
+        return []
+    return [text_id for _y, _x, _width, text_id in sorted(best)]
+
+
+def _remove_concept_body_candidates(
+    candidates: list[tuple[float, float, float, str]],
+    text_by_id: dict[str, dict[str, Any]],
+    option_by_text_id: dict[str, dict[str, Any]],
+) -> list[tuple[float, float, float, str]]:
+    concept_tops = [
+        _bbox_y(item.get("bbox_norm"))
+        for item in text_by_id.values()
+        if _letters_only(str(item.get("text") or "")).startswith("concept")
+    ]
+    concept_tops = [value for value in concept_tops if value is not None]
+    if not concept_tops:
+        return candidates
+    concept_top = min(concept_tops)
+    explicit_tops = [
+        y
+        for y, _x, _width, text_id in candidates
+        if y > concept_top
+        and _looks_like_explicit_choice_label(
+            str((option_by_text_id.get(text_id) or {}).get("text") or "")
+        )
+    ]
+    if not explicit_tops:
+        return candidates
+    first_explicit_option_top = min(explicit_tops)
+    return [
+        candidate
+        for candidate in candidates
+        if candidate[0] < concept_top or candidate[0] >= first_explicit_option_top - 0.005
+    ]
+
+
+def _vertical_group_score(group: list[tuple[float, float, float, str]]) -> float:
+    if len(group) < 2:
+        return 0.0
+    y_values = [item[0] for item in group]
+    gaps = [
+        y_values[index + 1] - y_values[index]
+        for index in range(len(y_values) - 1)
+    ]
+    if any(gap <= 0 or gap > 0.12 for gap in gaps):
+        return 0.0
+    average_gap = sum(gaps) / len(gaps)
+    gap_variance = sum(abs(gap - average_gap) for gap in gaps) / len(gaps)
+    x_values = [item[1] for item in group]
+    x_spread = max(x_values) - min(x_values)
+    width_signal = min(sum(item[2] for item in group), 1.0)
+    return len(group) * 2.0 + width_signal - gap_variance * 10.0 - x_spread * 5.0
 
 
 def call_ollama(
@@ -681,6 +807,151 @@ def _looks_like_answer_option(candidate: dict[str, Any]) -> bool:
     return relationship in {"possible_option_label", "nearby_text"} or "checkbox" in control_type or "radio" in control_type
 
 
+def _looks_like_question_context_text(value: str) -> bool:
+    normalized = _letters_only(value)
+    text = _clean_text(value).casefold()
+    if not normalized or _looks_like_stop_text(value):
+        return False
+    if normalized in {"concept"} or normalized.startswith("concept"):
+        return False
+    return any(
+        term in normalized
+        for term in (
+            "fromthelistbelow",
+            "bestdescribes",
+            "comparedto",
+            "alreadyexisting",
+            "selectoneanswer",
+            "oneansweronly",
+            "howlikely",
+            "howunlikely",
+            "howwould",
+            "whichbest",
+            "whatbest",
+            "pleasechoose",
+            "select",
+            "chooseone",
+            "rate",
+            "thinkingabout",
+        )
+    ) or "?" in text
+
+
+def _looks_like_single_choice_option_candidate(candidate: dict[str, Any]) -> bool:
+    value = str(candidate.get("text") or "")
+    normalized = _letters_only(value)
+    known_short_labels = {
+        "unlikely",
+        "neutral",
+        "likely",
+        "agree",
+        "disagree",
+        "satisfied",
+        "dissatisfied",
+    }
+    if len(normalized) < 10 and normalized not in known_short_labels:
+        return False
+    if _looks_like_stop_text(value) or _looks_like_question_context_text(value):
+        return False
+    if _looks_like_non_answer_text(value):
+        return False
+    relationship = str(candidate.get("relationship_type") or "")
+    control_type = str(candidate.get("control_type") or "").casefold()
+    has_control_signal = (
+        relationship in {"possible_option_label", "nearby_text", "text_labels_element"}
+        or any(token in control_type for token in ("radio", "checkbox", "icon", "unknown", "input"))
+    )
+    if not has_control_signal:
+        return False
+    return _looks_like_explicit_choice_label(value) or _looks_like_answer_phrase(value, candidate)
+
+
+def _looks_like_explicit_choice_label(value: str) -> bool:
+    normalized = _letters_only(value)
+    return any(
+        term in normalized
+        for term in (
+            "donotseeanyreasontouse",
+            "reasontouse",
+            "existsalreadyisbetter",
+            "alreadyisbetter",
+            "sameaswhatalreadyexists",
+            "slightlybetterthanwhatalreadyexists",
+            "muchmoreusefulthanwhatcurrentlyexists",
+            "alreadyexists",
+            "currentlyexists",
+            "veryunlikely",
+            "somewhatunlikely",
+            "unlikely",
+            "neutral",
+            "neither",
+            "somewhatlikely",
+            "verylikely",
+            "likely",
+            "stronglydisagree",
+            "disagree",
+            "agree",
+            "stronglyagree",
+            "satisfied",
+            "dissatisfied",
+        )
+    )
+
+
+def _looks_like_answer_phrase(value: str, candidate: dict[str, Any]) -> bool:
+    words = re.findall(r"[A-Za-z0-9]+", value)
+    if not 1 <= len(words) <= 12:
+        return False
+    normalized = _letters_only(value)
+    if not normalized or len(normalized) < 10:
+        return False
+    if _looks_like_non_answer_text(value) or _looks_like_stop_text(value):
+        return False
+    control_type = str(candidate.get("control_type") or "").casefold()
+    if "input" in control_type or "button" in control_type:
+        return False
+    if len(words) == 1 and len(normalized) > 34:
+        return False
+    return True
+
+
+def _looks_like_non_answer_text(value: str) -> bool:
+    normalized = _letters_only(value)
+    rejected_terms = (
+        "concept",
+        "fromthelistbelow",
+        "bestdescribes",
+        "comparedto",
+        "selectoneanswer",
+        "oneansweronly",
+        "pleaseexplain",
+        "typeyourresponse",
+        "continue",
+        "back",
+        "virginmediawebsite",
+        "windowcapture",
+        "autoworks",
+        "referencepages",
+        "privacygate",
+        "draganddrop",
+        "likedislikeprompts",
+        "opentext",
+        "categories",
+        "cards",
+    )
+    return any(term in normalized for term in rejected_terms)
+
+
+def _looks_like_stop_text(value: str) -> bool:
+    normalized = _letters_only(value)
+    return (
+        "pleaseexplain" in normalized
+        or "explainyouranswer" in normalized
+        or "typeyourresponse" in normalized
+        or normalized in {"back", "continue", "next", "submit"}
+    )
+
+
 def _bbox_y(value: Any) -> float | None:
     if not isinstance(value, dict):
         return None
@@ -699,8 +970,17 @@ def _bbox_x(value: Any) -> float | None:
         return None
 
 
+def _bbox_width(value: Any) -> float | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return float(value["width"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _normalized_yes_no_label(value: str) -> str:
-    text = re.sub(r"[^A-Za-z]+", "", value).casefold()
+    text = _letters_only(value)
     if text in {"yes", "no"}:
         return text
     if text in {"oyes", "0yes"}:
@@ -708,6 +988,10 @@ def _normalized_yes_no_label(value: str) -> str:
     if text in {"ono", "0no"}:
         return "no"
     return text
+
+
+def _letters_only(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "", value).casefold()
 
 
 def _union_bbox(items: list[Any]) -> dict[str, float]:
@@ -845,6 +1129,7 @@ def _clean_option_text(value: str) -> str:
         return "Yes"
     if normalized == "no":
         return "No"
+    value = re.sub(r"^[O0](?=[A-Z])", "", value.strip())
     return _clean_text(value)
 
 

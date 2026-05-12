@@ -39,16 +39,17 @@ def validate_manual_review_input(
 
     source_decision_id = str(manual_input.get("source_decision_id", ""))
     if source_decision_id != decision.get("decision_id"):
-        issues.append(
+        warnings.append(
             issue(
-                "source_decision_mismatch",
-                "Manual review input does not match latest_answer_decision.json.",
+                "stale_manual_review_input",
+                "Ignoring stale manual review input because it does not match latest_answer_decision.json.",
                 expected=decision.get("decision_id", ""),
                 actual=source_decision_id,
             )
         )
+        manual_input = {"approvals": []}
 
-    if manual_input.get("session_id") != decision.get("session_id"):
+    if source_decision_id == decision.get("decision_id") and manual_input.get("session_id") != decision.get("session_id"):
         issues.append(
             issue(
                 "session_mismatch",
@@ -58,7 +59,7 @@ def validate_manual_review_input(
             )
         )
 
-    if manual_input.get("session_id") != session.get("session_id"):
+    if source_decision_id == decision.get("decision_id") and manual_input.get("session_id") != session.get("session_id"):
         issues.append(
             issue(
                 "session_state_mismatch",
@@ -68,7 +69,7 @@ def validate_manual_review_input(
             )
         )
 
-    if manual_input.get("task_id") != decision.get("task_id"):
+    if source_decision_id == decision.get("decision_id") and manual_input.get("task_id") != decision.get("task_id"):
         issues.append(
             issue(
                 "task_mismatch",

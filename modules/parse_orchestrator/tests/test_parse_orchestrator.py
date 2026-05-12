@@ -246,6 +246,275 @@ def _layout_with_two_yes_no_cards(tmp_path: Path) -> dict:
     return layout
 
 
+def _layout_with_comparison_choice_evidence(tmp_path: Path) -> dict:
+    layout = _layout(tmp_path)
+    layout["text_blocks"] = [
+        {
+            "text_id": "T17",
+            "text": "Fromthelistbelowwhichbestdescribesyourthinking about thisidea",
+            "bbox_norm": {"x": 0.35, "y": 0.29, "width": 0.33, "height": 0.025},
+            "associated_region_id": "R10",
+        },
+        {
+            "text_id": "T18",
+            "text": "compared towhat alreadyexisting on theVirginMediawebsite?Select",
+            "bbox_norm": {"x": 0.35, "y": 0.32, "width": 0.34, "height": 0.026},
+            "associated_region_id": "R10",
+        },
+        {
+            "text_id": "T19",
+            "text": "one answer only.",
+            "bbox_norm": {"x": 0.35, "y": 0.35, "width": 0.08, "height": 0.022},
+            "associated_region_id": "R10",
+        },
+        {
+            "text_id": "T20",
+            "text": "Concept:",
+            "bbox_norm": {"x": 0.35, "y": 0.39, "width": 0.04, "height": 0.02},
+            "associated_region_id": "R11",
+        },
+        {
+            "text_id": "T21",
+            "text": "an app designed to guide you through your entire broadband setup",
+            "bbox_norm": {"x": 0.39, "y": 0.39, "width": 0.28, "height": 0.02},
+            "associated_region_id": "R11",
+        },
+        {
+            "text_id": "T25",
+            "text": "OIdo not see anyreasontouse this",
+            "bbox_norm": {"x": 0.36, "y": 0.51, "width": 0.13, "height": 0.022},
+            "associated_region_id": "R11",
+        },
+        {
+            "text_id": "T26",
+            "text": "Whatexistsalreadyisbetterthan this",
+            "bbox_norm": {"x": 0.37, "y": 0.57, "width": 0.13, "height": 0.019},
+            "associated_region_id": "R12",
+        },
+        {
+            "text_id": "T27",
+            "text": "Thisisessentially the same aswhat already exists",
+            "bbox_norm": {"x": 0.37, "y": 0.62, "width": 0.17, "height": 0.019},
+            "associated_region_id": "R13",
+        },
+        {
+            "text_id": "T28",
+            "text": "Thiswouldbeslightlybetter thanwhatalready exists",
+            "bbox_norm": {"x": 0.37, "y": 0.68, "width": 0.18, "height": 0.019},
+            "associated_region_id": "R14",
+        },
+        {
+            "text_id": "T29",
+            "text": "Thiswouldbemuchmoreuseful thanwhatcurrentlyexists",
+            "bbox_norm": {"x": 0.37, "y": 0.73, "width": 0.2, "height": 0.019},
+            "associated_region_id": "R14",
+        },
+        {
+            "text_id": "T31",
+            "text": "Please explain your answer in detail:",
+            "bbox_norm": {"x": 0.35, "y": 0.78, "width": 0.13, "height": 0.022},
+            "associated_region_id": "R14",
+        },
+    ]
+    layout["elements"] = [
+        {
+            "element_id": f"E{text_id[1:]}",
+            "region_id": region_id,
+            "element_type_hint": control_type,
+            "click_point_norm": click_point,
+        }
+        for text_id, region_id, control_type, click_point in [
+            ("T25", "R11", "icon_like", {"x": 0.36, "y": 0.52}),
+            ("T26", "R12", "checkbox_like", {"x": 0.36, "y": 0.58}),
+            ("T27", "R13", "checkbox_like", {"x": 0.36, "y": 0.63}),
+            ("T28", "R14", "unknown", {"x": 0.36, "y": 0.69}),
+            ("T29", "R14", "input_like", {"x": 0.36, "y": 0.74}),
+        ]
+    ]
+    layout["relationships"] = [
+        {
+            "relationship_id": f"REL{text_id[1:]}",
+            "relationship_type": relationship_type,
+            "source_id": text_id,
+            "target_id": f"E{text_id[1:]}",
+            "confidence": confidence,
+        }
+        for text_id, relationship_type, confidence in [
+            ("T25", "nearby_text", 0.35),
+            ("T26", "possible_option_label", 0.6),
+            ("T27", "nearby_text", 0.35),
+            ("T28", "nearby_text", 0.35),
+            ("T29", "nearby_text", 0.35),
+        ]
+    ]
+    return layout
+
+
+def _layout_with_likert_choice_evidence(tmp_path: Path) -> dict:
+    layout = _layout(tmp_path)
+    layout["text_blocks"] = [
+        {
+            "text_id": "T10",
+            "text": "How likely are you to use this service?",
+            "bbox_norm": {"x": 0.32, "y": 0.24, "width": 0.28, "height": 0.03},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T11",
+            "text": "Select one answer only.",
+            "bbox_norm": {"x": 0.32, "y": 0.28, "width": 0.16, "height": 0.025},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T20",
+            "text": "Very unlikely",
+            "bbox_norm": {"x": 0.36, "y": 0.38, "width": 0.1, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T21",
+            "text": "Unlikely",
+            "bbox_norm": {"x": 0.36, "y": 0.44, "width": 0.07, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T22",
+            "text": "Neutral",
+            "bbox_norm": {"x": 0.36, "y": 0.5, "width": 0.06, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T23",
+            "text": "Likely",
+            "bbox_norm": {"x": 0.36, "y": 0.56, "width": 0.05, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T24",
+            "text": "Very likely",
+            "bbox_norm": {"x": 0.36, "y": 0.62, "width": 0.09, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T30",
+            "text": "Continue",
+            "bbox_norm": {"x": 0.65, "y": 0.9, "width": 0.05, "height": 0.02},
+            "associated_region_id": "R10",
+        },
+    ]
+    layout["elements"] = [
+        {
+            "element_id": f"E{text_id[1:]}",
+            "region_id": "R9",
+            "element_type_hint": "icon_like",
+            "click_point_norm": {"x": 0.34, "y": y + 0.01},
+        }
+        for text_id, y in [
+            ("T20", 0.38),
+            ("T21", 0.44),
+            ("T22", 0.5),
+            ("T23", 0.56),
+            ("T24", 0.62),
+        ]
+    ]
+    layout["relationships"] = [
+        {
+            "relationship_id": f"REL{text_id[1:]}",
+            "relationship_type": "nearby_text",
+            "source_id": text_id,
+            "target_id": f"E{text_id[1:]}",
+            "confidence": 0.35,
+        }
+        for text_id in ["T20", "T21", "T22", "T23", "T24"]
+    ]
+    return layout
+
+
+def _layout_with_concept_then_choice_evidence(tmp_path: Path) -> dict:
+    layout = _layout(tmp_path)
+    layout["text_blocks"] = [
+        {
+            "text_id": "T10",
+            "text": "What best describes your reaction to this idea?",
+            "bbox_norm": {"x": 0.32, "y": 0.22, "width": 0.34, "height": 0.03},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T11",
+            "text": "Concept:",
+            "bbox_norm": {"x": 0.32, "y": 0.31, "width": 0.05, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T12",
+            "text": "This service would keep all setup steps in one place.",
+            "bbox_norm": {"x": 0.38, "y": 0.31, "width": 0.28, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T20",
+            "text": "Strongly disagree",
+            "bbox_norm": {"x": 0.36, "y": 0.44, "width": 0.12, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T21",
+            "text": "Disagree",
+            "bbox_norm": {"x": 0.36, "y": 0.5, "width": 0.07, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T22",
+            "text": "Agree",
+            "bbox_norm": {"x": 0.36, "y": 0.56, "width": 0.05, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T23",
+            "text": "Strongly agree",
+            "bbox_norm": {"x": 0.36, "y": 0.62, "width": 0.11, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T31",
+            "text": "Please explain your answer in detail:",
+            "bbox_norm": {"x": 0.32, "y": 0.7, "width": 0.18, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+        {
+            "text_id": "T32",
+            "text": "Type your response here",
+            "bbox_norm": {"x": 0.34, "y": 0.75, "width": 0.12, "height": 0.02},
+            "associated_region_id": "R9",
+        },
+    ]
+    layout["elements"] = [
+        {
+            "element_id": f"E{text_id[1:]}",
+            "region_id": "R9",
+            "element_type_hint": "checkbox_like",
+            "click_point_norm": {"x": 0.34, "y": y + 0.01},
+        }
+        for text_id, y in [
+            ("T20", 0.44),
+            ("T21", 0.5),
+            ("T22", 0.56),
+            ("T23", 0.62),
+        ]
+    ]
+    layout["relationships"] = [
+        {
+            "relationship_id": f"REL{text_id[1:]}",
+            "relationship_type": "possible_option_label",
+            "source_id": text_id,
+            "target_id": f"E{text_id[1:]}",
+            "confidence": 0.6,
+        }
+        for text_id in ["T20", "T21", "T22", "T23"]
+    ]
+    return layout
+
+
 def test_load_layout_index_fixture() -> None:
     layout = load_layout_index()
     assert layout["layout_hints"]["recommended_regions_for_detail_parse"]
@@ -493,6 +762,90 @@ def test_ollama_evidence_parse_recovers_repeated_yes_no_cards(tmp_path: Path) ->
         [option["option_id"] for option in question["answer_options"]]
         for question in parsed["questions"]
     ] == [["T2", "T3"], ["T5", "T6"]]
+
+
+def test_ollama_evidence_parse_repairs_comparison_choice_response_drift(tmp_path: Path) -> None:
+    layout = _layout_with_comparison_choice_evidence(tmp_path)
+    evidence = build_evidence_payload(
+        layout,
+        _runtime_context(tmp_path),
+        _config(),
+        {"selected_region_ids": ["R10", "R11", "R12", "R13", "R14"]},
+    )
+
+    parsed = parsed_page_from_compact_response(
+        json.dumps({"form_elements": [{"type": "radio", "options": ["A", "B"]}]}),
+        evidence,
+        _runtime_context(tmp_path),
+    )
+
+    question = parsed["questions"][0]
+    assert question["question_type"] == "single_choice"
+    assert question["question_stem"]["text"] == (
+        "Fromthelistbelowwhichbestdescribesyourthinking about thisidea "
+        "compared towhat alreadyexisting on theVirginMediawebsite?Select "
+        "one answer only."
+    )
+    assert [option["option_id"] for option in question["answer_options"]] == [
+        "T25",
+        "T26",
+        "T27",
+        "T28",
+        "T29",
+    ]
+    assert [option["control_element_id"] for option in question["answer_options"]] == [
+        "E25",
+        "E26",
+        "E27",
+        "E28",
+        "E29",
+    ]
+
+
+def test_ollama_evidence_parse_repairs_generic_likert_choice_response_drift(tmp_path: Path) -> None:
+    layout = _layout_with_likert_choice_evidence(tmp_path)
+    evidence = build_evidence_payload(
+        layout,
+        _runtime_context(tmp_path),
+        _config(),
+        {"selected_region_ids": ["R9", "R10"]},
+    )
+
+    parsed = parsed_page_from_compact_response(
+        json.dumps({"fields": [{"label": "unusable model response"}]}),
+        evidence,
+        _runtime_context(tmp_path),
+    )
+
+    question = parsed["questions"][0]
+    assert question["question_stem"]["text"] == "How likely are you to use this service? Select one answer only."
+    assert [option["text"] for option in question["answer_options"]] == [
+        "Very unlikely",
+        "Unlikely",
+        "Neutral",
+        "Likely",
+        "Very likely",
+    ]
+
+
+def test_ollama_evidence_parse_repairs_choice_after_concept_before_text_input(tmp_path: Path) -> None:
+    layout = _layout_with_concept_then_choice_evidence(tmp_path)
+    evidence = build_evidence_payload(
+        layout,
+        _runtime_context(tmp_path),
+        _config(),
+        {"selected_region_ids": ["R9"]},
+    )
+
+    parsed = parsed_page_from_compact_response(
+        json.dumps({"fields": [{"label": "unusable model response"}]}),
+        evidence,
+        _runtime_context(tmp_path),
+    )
+
+    question = parsed["questions"][0]
+    assert question["question_stem"]["text"] == "What best describes your reaction to this idea?"
+    assert [option["option_id"] for option in question["answer_options"]] == ["T20", "T21", "T22", "T23"]
 
 
 def test_orchestrator_uses_ollama_evidence_mode(

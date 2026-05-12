@@ -160,6 +160,27 @@ def _write_runtime(tmp_path: Path, option_ids: list[str]) -> None:
     )
 
 
+def _write_stale_manual_review_runtime(tmp_path: Path, *, decision_requires_review: bool) -> None:
+    runtime = tmp_path / "runtime_state"
+    decision = _decision()
+    decision["requires_human_review"] = decision_requires_review
+    decision["overall_confidence"] = 0.0 if decision_requires_review else 1.0
+    decision["question_decisions"][0]["requires_human_review"] = decision_requires_review
+    decision["question_decisions"][0]["recommended_option_ids"] = [] if decision_requires_review else ["T21"]
+    decision["question_decisions"][0]["confidence"] = 0.0 if decision_requires_review else 1.0
+    _write_json(runtime / "latest_answer_decision.json", decision)
+    _write_json(runtime / "latest_orchestrated_parse.json", _parse())
+    _write_json(runtime / "latest_survey_session.json", _session())
+    stale_input = _manual_input(["missing"])
+    stale_input["source_decision_id"] = "old_decision"
+    stale_input["decision_id"] = "old_decision"
+    _write_json(runtime / "manual_review_input.json", stale_input)
+    _write_json(
+        runtime / "latest_answer_engine_report.json",
+        {"validation_passed": True, "issues": [], "warnings": [], "requires_human_review": decision_requires_review},
+    )
+
+
 def test_valid_manual_approval_converts_human_review_required_to_decision_ready(tmp_path, monkeypatch):
     _patch_paths(monkeypatch, tmp_path)
     _write_runtime(tmp_path, ["T21"])
@@ -185,6 +206,32 @@ def test_invalid_option_id_keeps_human_review_required_and_reports_issue(tmp_pat
     assert reviewed["requires_human_review"] is True
     assert reviewed["question_decisions"][0]["recommended_option_ids"] == []
     assert "unknown_option_id" in [issue["type"] for issue in report["issues"]]
+
+
+def test_stale_manual_review_input_is_ignored_for_ready_decision(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    _write_stale_manual_review_runtime(tmp_path, decision_requires_review=False)
+
+    reviewed, report = human_review_processor.process_manual_review("auto")
+
+    assert report["validation_passed"] is True
+    assert reviewed["requires_human_review"] is False
+    assert reviewed["question_decisions"][0]["recommended_option_ids"] == ["T21"]
+    assert report["issues"] == []
+    assert [warning["type"] for warning in report["warnings"]] == ["stale_manual_review_input"]
+
+
+def test_stale_manual_review_input_does_not_mask_required_review(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    _write_stale_manual_review_runtime(tmp_path, decision_requires_review=True)
+
+    reviewed, report = human_review_processor.process_manual_review("auto")
+
+    assert report["validation_passed"] is False
+    assert reviewed["requires_human_review"] is True
+    assert "source_decision_mismatch" not in [issue["type"] for issue in report["issues"]]
+    assert "missing_approval" in [issue["type"] for issue in report["issues"]]
+    assert [warning["type"] for warning in report["warnings"]] == ["stale_manual_review_input"]
 
 
 def test_reviewed_decision_produces_click_option_action(tmp_path, monkeypatch):
