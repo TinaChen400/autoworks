@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 
 import win32con
@@ -15,6 +16,14 @@ class WindowPlacement:
     top: int
     width: int
     height: int
+
+
+def _set_process_dpi_aware() -> None:
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SetProcessDPIAware()
+    except Exception:  # noqa: BLE001
+        return
 
 
 def anchor_to_placement(anchor: AnchorProfile | AnchorFrame) -> WindowPlacement:
@@ -37,6 +46,7 @@ def get_window_process_id(hwnd: int) -> int:
 
 
 def get_window_placement(hwnd: int) -> WindowPlacement:
+    _set_process_dpi_aware()
     left, top, right, bottom = win32gui.GetWindowRect(hwnd)
     return WindowPlacement(left=left, top=top, width=right - left, height=bottom - top)
 
@@ -55,6 +65,7 @@ def placement_to_anchor_origin(
 
 
 def move_resize_window(hwnd: int, placement: WindowPlacement) -> None:
+    _set_process_dpi_aware()
     if not is_valid_window(hwnd):
         raise ValueError(f"Invalid hwnd: {hwnd}")
 
