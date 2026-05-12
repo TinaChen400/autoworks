@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 
-from modules.dashboard.app import build_runtime_summary, render_dashboard
+from modules.dashboard.app import DashboardHandler, build_runtime_summary, render_dashboard
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -270,11 +270,73 @@ def test_render_dashboard_shows_click_point_and_real_click_is_separate(tmp_path:
 
     html = render_dashboard(tmp_path)
 
+    assert "Refresh Targets" in html
+    assert "Snap Target" not in html
     assert "Run Dry-Run Executor" in html
     assert "Real Click 1 Action" in html
     assert "/run-real-click-once" in html
     assert "parsed_control_click_point" in html
     assert "{&#x27;x&#x27;: 747, &#x27;y&#x27;: 802}" in html
+
+
+def test_render_dashboard_shows_anchor_mismatch_target_status(tmp_path: Path) -> None:
+    write_ready_chain(tmp_path)
+    write_json(
+        tmp_path / "latest_locked_target.json",
+        {
+            "target_locked": False,
+            "target_window_title": "Tina",
+            "target_window_handle": 123,
+            "anchor_frame": {"x": 100, "y": 80, "width": 1920, "height": 1080},
+            "capture_region": {"left": 100, "top": 80, "width": 1920, "height": 1080},
+            "locked_region": {"left": 100, "top": 80, "width": 1920, "height": 1080},
+            "target_window_rect": {"left": 100, "top": 80, "width": 1440, "height": 1080},
+            "blocked_reason": "Locked target window does not match the anchor frame after snap.",
+        },
+    )
+    write_json(
+        tmp_path / "latest_target_candidates.json",
+        {
+            "ok": True,
+            "candidates": [
+                {
+                    "hwnd": 123,
+                    "title": "Tina",
+                    "class_name": "FlutterMultiWindow",
+                    "bbox": {"left": 100, "top": 80, "width": 1440, "height": 1080},
+                }
+            ],
+        },
+    )
+
+    html = render_dashboard(tmp_path)
+
+    assert "Anchor frame" in html
+    assert "Target window rect" in html
+    assert "does not match the anchor frame" in html
+    assert "Lock Target to Anchor" in html
+
+
+def test_preview_block_preserves_existing_target_lock_diagnostics(tmp_path: Path) -> None:
+    reason = "Locked target window does not match the anchor frame after snap."
+    write_json(
+        tmp_path / "latest_locked_target.json",
+        {
+            "target_locked": False,
+            "target_window_rect": {"left": 100, "top": 80, "width": 1440, "height": 1080},
+            "anchor_frame": {"x": 100, "y": 80, "width": 1920, "height": 1080},
+            "blocked_reason": reason,
+        },
+    )
+    handler = object.__new__(DashboardHandler)
+    handler.runtime_state_dir = tmp_path
+
+    DashboardHandler.write_blocked_lock(handler)
+
+    payload = json.loads((tmp_path / "latest_locked_target.json").read_text(encoding="utf-8"))
+    assert payload["blocked_reason"] == reason
+    assert payload["target_window_rect"]["width"] == 1440
+    assert payload["anchor_frame"]["width"] == 1920
 
 
 def test_render_dashboard_shows_multi_action_real_click_results(tmp_path: Path) -> None:

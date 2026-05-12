@@ -32,6 +32,9 @@ CAPTURE_PROVENANCE_PATH = RUNTIME_STATE_DIR / "latest_capture_provenance.json"
 NO_LOCKED_TARGET_MESSAGE = (
     "No locked target window. Please snap and lock the KVM/remote window before running preview."
 )
+TARGET_RECT_MISMATCH_MESSAGE = (
+    "Locked target window does not match the anchor frame after snap."
+)
 
 
 def utc_now_iso() -> str:
@@ -110,6 +113,29 @@ def window_origin_is_aligned(
     )
 
 
+def window_rect_matches_capture_region(
+    window_rect: WindowPlacement,
+    capture_region: WindowPlacement,
+    *,
+    tolerance_px: int = 8,
+) -> bool:
+    return (
+        abs(window_rect.left - capture_region.left) <= tolerance_px
+        and abs(window_rect.top - capture_region.top) <= tolerance_px
+        and abs(window_rect.width - capture_region.width) <= tolerance_px
+        and abs(window_rect.height - capture_region.height) <= tolerance_px
+    )
+
+
+def target_rect_mismatch_reason(
+    capture_region: WindowPlacement,
+    target_window_rect: WindowPlacement,
+) -> str:
+    expected = placement_to_dict(capture_region)
+    actual = placement_to_dict(target_window_rect)
+    return f"{TARGET_RECT_MISMATCH_MESSAGE} Expected {expected}, got {actual}."
+
+
 def realign_window_origin(hwnd: int, capture_region: WindowPlacement) -> WindowPlacement:
     current = get_window_placement(hwnd)
     if window_origin_is_aligned(current, capture_region):
@@ -124,6 +150,33 @@ def realign_window_origin(hwnd: int, capture_region: WindowPlacement) -> WindowP
         ),
     )
     return get_window_placement(hwnd)
+
+
+def blocked_locked_target_payload(
+    *,
+    matched: WindowInfo,
+    capture_region: WindowPlacement,
+    target_window_rect: WindowPlacement,
+    dpi_scale: Any,
+    blocked_reason: str,
+) -> dict[str, Any]:
+    capture_region_dict = placement_to_dict(capture_region)
+    return {
+        "target_locked": False,
+        "created_at": utc_now_iso(),
+        "capture_source": "locked_target",
+        "target_window_title": matched.title,
+        "target_window_handle": matched.hwnd,
+        "target_window_class": matched.class_name,
+        "capture_region": capture_region_dict,
+        "anchor_frame": placement_to_anchor_frame(capture_region),
+        "locked_region": capture_region_dict,
+        "bbox": capture_region_dict,
+        "target_window_rect": placement_to_dict(target_window_rect),
+        "dpi_scale": dpi_scale,
+        "blocked_reason": blocked_reason,
+        "errors": [blocked_reason],
+    }
 
 
 def locked_target_payload(
@@ -201,12 +254,22 @@ def lock_saved_target(runtime_state_dir: Path = RUNTIME_STATE_DIR) -> dict[str, 
     snap_to_anchor(matched.hwnd, anchor)
     capture_region = anchor_frame_to_placement(resolve_anchor_frame(anchor))
     target_window_rect = realign_window_origin(matched.hwnd, capture_region)
-    payload = locked_target_payload(
-        matched=matched,
-        capture_region=capture_region,
-        target_window_rect=target_window_rect,
-        dpi_scale=anchor.get("scale"),
-    )
+    if window_rect_matches_capture_region(target_window_rect, capture_region):
+        payload = locked_target_payload(
+            matched=matched,
+            capture_region=capture_region,
+            target_window_rect=target_window_rect,
+            dpi_scale=anchor.get("scale"),
+        )
+    else:
+        blocked_reason = target_rect_mismatch_reason(capture_region, target_window_rect)
+        payload = blocked_locked_target_payload(
+            matched=matched,
+            capture_region=capture_region,
+            target_window_rect=target_window_rect,
+            dpi_scale=anchor.get("scale"),
+            blocked_reason=blocked_reason,
+        )
     write_json(runtime_state_dir / LOCKED_TARGET_PATH.name, payload)
     return payload
 
@@ -231,12 +294,22 @@ def lock_target_by_handle(
     snap_to_anchor(matched.hwnd, anchor)
     capture_region = anchor_frame_to_placement(resolve_anchor_frame(anchor))
     target_window_rect = realign_window_origin(matched.hwnd, capture_region)
-    payload = locked_target_payload(
-        matched=matched,
-        capture_region=capture_region,
-        target_window_rect=target_window_rect,
-        dpi_scale=anchor.get("scale"),
-    )
+    if window_rect_matches_capture_region(target_window_rect, capture_region):
+        payload = locked_target_payload(
+            matched=matched,
+            capture_region=capture_region,
+            target_window_rect=target_window_rect,
+            dpi_scale=anchor.get("scale"),
+        )
+    else:
+        blocked_reason = target_rect_mismatch_reason(capture_region, target_window_rect)
+        payload = blocked_locked_target_payload(
+            matched=matched,
+            capture_region=capture_region,
+            target_window_rect=target_window_rect,
+            dpi_scale=anchor.get("scale"),
+            blocked_reason=blocked_reason,
+        )
     write_json(runtime_state_dir / LOCKED_TARGET_PATH.name, payload)
     return payload
 
@@ -258,8 +331,11 @@ def validate_locked_target(
         return False, payload, NO_LOCKED_TARGET_MESSAGE
 
     current = realign_window_origin(hwnd, capture_region)
-    if not window_origin_is_aligned(current, capture_region):
-        return False, payload, NO_LOCKED_TARGET_MESSAGE
+    if not window_rect_matches_capture_region(current, capture_region):
+        reason = target_rect_mismatch_reason(capture_region, current)
+        payload["blocked_reason"] = reason
+        payload["target_window_rect"] = placement_to_dict(current)
+        return False, payload, reason
 
     return True, payload, ""
 

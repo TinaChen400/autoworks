@@ -663,7 +663,7 @@ def render_controls(target_locked: bool, summary: dict[str, Any]) -> str:
         else f"Real Click {executable_count} Actions"
     )
     controls = [
-        '<form method="post" action="/snap-target"><button>Snap Target</button></form>',
+        '<form method="post" action="/snap-target"><button>Refresh Targets</button></form>',
         '<form method="post" action="/capture-locked"><button>Capture Locked Window</button></form>',
         '<form method="get" action="/"><button>Check Status</button></form>',
         control_form("/run-parse", "Run Parse", can_run.get("parse")),
@@ -867,6 +867,8 @@ def render_target_status(
         "Status": status,
         "Target window title": locked_target.get("target_window_title", ""),
         "Target window handle": locked_target.get("target_window_handle", ""),
+        "Anchor frame": locked_target.get("anchor_frame", ""),
+        "Target window rect": locked_target.get("target_window_rect", ""),
         "Locked target region": (
             locked_target.get("locked_region") or locked_target.get("bbox") or ""
         ),
@@ -904,7 +906,7 @@ def render_target_candidates(target_candidates: dict[str, Any]) -> str:
         "<table><thead><tr><th></th><th>Title</th><th>Class</th><th>Handle</th>"
         "<th>Region</th></tr></thead><tbody>"
         + "".join(rows)
-        + '</tbody></table><p><button>Lock Target</button></p></form>'
+        + '</tbody></table><p><button>Lock Target to Anchor</button></p></form>'
     )
 
 
@@ -1107,18 +1109,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def write_blocked_lock(self) -> None:
-        payload = {
-            "target_locked": False,
-            "blocked_reason": (
-                "No locked target window. Please snap and lock the KVM/remote window before "
-                "running preview."
-            ),
-            "errors": [
-                "No locked target window. Please snap and lock the KVM/remote window before "
-                "running preview."
-            ],
-        }
         path = self.runtime_state_dir / "latest_locked_target.json"
+        existing = read_json(path)
+        reason = (
+            existing.get("blocked_reason")
+            or "No locked target window. Please snap and lock the KVM/remote window before "
+            "running preview."
+        )
+        payload = dict(existing) if isinstance(existing, dict) else {}
+        payload["target_locked"] = False
+        payload["blocked_reason"] = reason
+        payload["errors"] = payload.get("errors") or [reason]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
