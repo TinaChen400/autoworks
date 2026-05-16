@@ -34,6 +34,7 @@ def decide(
     question_type = str(question.get("question_type") or "unknown")
     answer_mode = determine_answer_mode(question, category, profile)
     answer_notes = load_relevant_answer_notes(question)
+    options_by_id = _options_by_id(question)
     if not profile_exists and answer_mode == "strict_private":
         decision = question_decision(
             question,
@@ -59,6 +60,25 @@ def decide(
             num_predict=int(config.get("profile_llm_num_predict", 512)),
         )
         response = extract_json_object(raw)
+        stale_references = _stale_option_references(response, options_by_id)
+        if stale_references:
+            retry_raw = call_ollama_answerer(
+                endpoint=str(config.get("profile_llm_endpoint") or DEFAULT_ENDPOINT),
+                model=str(config.get("profile_llm_model") or "qwen2.5:14b"),
+                prompt=build_prompt(
+                    question,
+                    category,
+                    profile,
+                    session,
+                    config,
+                    answer_mode,
+                    answer_notes,
+                    stale_option_ids=stale_references,
+                ),
+                timeout_seconds=int(config.get("profile_llm_timeout_seconds", 90)),
+                num_predict=int(config.get("profile_llm_num_predict", 512)),
+            )
+            response = extract_json_object(retry_raw)
     except Exception as exc:  # noqa: BLE001 - fall back to human review cleanly.
         decision = question_decision(
             question,
@@ -156,19 +176,26 @@ def build_prompt(
     config: dict[str, Any],
     answer_mode: str,
     answer_notes: list[dict[str, Any]] | None = None,
+    stale_option_ids: list[str] | None = None,
 ) -> str:
     _ = session
+    stale_option_ids = stale_option_ids or []
     payload = {
         "answer_mode": answer_mode,
         "user_profile": profile,
         "external_reference_notes": answer_notes or [],
         "current_page_only": True,
+        "retry_context": {
+            "is_retry_after_non_current_option_reference": bool(stale_option_ids),
+            "rejected_non_current_option_ids": stale_option_ids,
+        },
         "answer_policy": {
             "answer_as_user": True,
             "do_not_invent_private_facts": True,
             "strict_private_requires_profile_evidence": True,
             "do_not_use_prior_page_memory": True,
             "option_ids_are_current_page_only": True,
+            "reason_basis_and_evidence_must_not_reference_non_current_option_ids": True,
             "representative_persona_may_answer_low_risk_questions": True,
             "professional_judgement_may_use_allowed_professional_range": True,
             "used_answer_notes_must_be_from_external_reference_notes": True,
@@ -197,7 +224,14 @@ def build_prompt(
         "For strict_private, use only explicit user_profile evidence; otherwise require human review. "
         "Use only the current question and current answer_options. Do not use prior page memory, old option IDs, or session history. "
         "Use external_reference_notes only when they are relevant, and list only their ids in used_answer_notes. "
-        "Do not invent private facts, credentials, exact addresses, named institutions, or medical/financial details.\n\n"
+        "Do not invent private facts, credentials, exact addresses, named institutions, or medical/financial details. "
+        + (
+            "This is a retry because your previous response referenced option IDs that do not exist on the current page: "
+            f"{', '.join(stale_option_ids)}. Re-answer using only current answer_options and do not mention those IDs anywhere. "
+            if stale_option_ids
+            else ""
+        )
+        + "\n\n"
         "Return this shape:\n"
         "{\"answer_mode\":\"representative_persona|professional_judgement|strict_private\","
         "\"recommended_option_ids\":[\"option_id\"],\"recommended_text_answer\":\"\","
@@ -219,11 +253,7 @@ def decision_from_response(
     default_answer_mode: str = "representative_persona",
     answer_notes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    options_by_id = {
-        str(option.get("option_id")): option
-        for option in question.get("answer_options", []) or []
-        if option.get("option_id")
-    }
+    options_by_id = _options_by_id(question)
     selected_ids = _selected_option_ids(response.get("recommended_option_ids"), options_by_id)
     if question_type == "single_choice":
         selected_ids = selected_ids[:1]
@@ -244,10 +274,7 @@ def decision_from_response(
     stale_references = _stale_option_references(response, options_by_id)
     if stale_references:
         requires_review = True
-        human_review_reason = (
-            human_review_reason
-            or "Profile LLM referenced option IDs that are not present on the current page."
-        )
+        human_review_reason = human_review_reason or "Profile LLM referenced non-current option IDs."
         selected_ids = []
     if answer_mode == "strict_private" and category in PERSONAL_CATEGORIES and not evidence:
         requires_review = True
@@ -299,6 +326,14 @@ def _selected_option_ids(value: Any, options_by_id: dict[str, dict[str, Any]]) -
         if option_id in options_by_id and option_id not in selected:
             selected.append(option_id)
     return selected
+
+
+def _options_by_id(question: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(option.get("option_id")): option
+        for option in question.get("answer_options", []) or []
+        if option.get("option_id")
+    }
 
 
 def _evidence(value: Any) -> list[dict[str, Any]]:

@@ -525,6 +525,196 @@ def test_profile_llm_rejects_non_current_option_references(tmp_path, monkeypatch
     assert report["requires_human_review"] is True
 
 
+def test_profile_llm_retries_when_reason_references_non_current_option_id(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(tmp_path / "config" / "user_profile.json", {"notes": ["Answer from current page."]})
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Compared to what already exists?"},
+        "answer_options": [
+            {"option_id": "T24", "text": "This is essentially the same as what already exists"},
+            {"option_id": "T25", "text": "This would be slightly better than what already exists"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+    prompts = []
+
+    def fake_call(**kwargs):
+        prompts.append(kwargs["prompt"])
+        if len(prompts) == 1:
+            return json.dumps(
+                {
+                    "answer_mode": "representative_persona",
+                    "recommended_option_ids": ["T25"],
+                    "recommended_text_answer": "",
+                    "confidence": 0.9,
+                    "basis": "current page judgement",
+                    "reason": "The older T29 answer is closest, so choose T25.",
+                    "evidence": [],
+                    "used_answer_notes": [],
+                    "requires_human_review": False,
+                    "human_review_reason": "",
+                }
+            )
+        assert "This is a retry" in kwargs["prompt"]
+        assert "T29" in kwargs["prompt"]
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T25"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "current page representative judgement",
+                "reason": "Selected the balanced current-page option.",
+                "evidence": [],
+                "used_answer_notes": [],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert len(prompts) == 2
+    assert qd["recommended_option_ids"] == ["T25"]
+    assert qd["requires_human_review"] is False
+    assert qd["warnings"] == []
+    assert report["requires_human_review"] is False
+
+
+def test_profile_llm_retry_still_referencing_old_option_requires_review(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(tmp_path / "config" / "user_profile.json", {"notes": ["Answer from current page."]})
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Compared to what already exists?"},
+        "answer_options": [
+            {"option_id": "T24", "text": "This is essentially the same as what already exists"},
+            {"option_id": "T25", "text": "This would be slightly better than what already exists"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+    calls = 0
+
+    def fake_call(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T25"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "T29 was selected before.",
+                "reason": "Use T29 as the prior reference and choose the closest current option.",
+                "evidence": [],
+                "used_answer_notes": [],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert calls == 2
+    assert qd["recommended_option_ids"] == []
+    assert qd["requires_human_review"] is True
+    assert qd["human_review_reason"] == "Profile LLM referenced non-current option IDs."
+    assert "non-current option IDs" in qd["warnings"][0]
+    assert report["requires_human_review"] is True
+
+
+def test_profile_llm_does_not_retry_when_response_has_only_current_option_ids(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(tmp_path / "config" / "user_profile.json", {"notes": ["Answer from current page."]})
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Compared to what already exists?"},
+        "answer_options": [
+            {"option_id": "T24", "text": "This is essentially the same as what already exists"},
+            {"option_id": "T25", "text": "This would be slightly better than what already exists"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+    calls = 0
+
+    def fake_call(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T25"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "current page representative judgement",
+                "reason": "Selected T25 from the current page options.",
+                "evidence": [
+                    {
+                        "source": "user_profile.notes",
+                        "value": "Answer from current page.",
+                        "matched_text": "T25",
+                    }
+                ],
+                "used_answer_notes": [],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert calls == 1
+    assert qd["recommended_option_ids"] == ["T25"]
+    assert qd["requires_human_review"] is False
+    assert report["requires_human_review"] is False
+
+
 def test_profile_llm_missing_profile_can_use_representative_persona(tmp_path, monkeypatch):
     _patch_answer_engine_paths(monkeypatch, tmp_path)
     _write_json(
