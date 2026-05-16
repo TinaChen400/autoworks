@@ -105,7 +105,7 @@ class PerceptionIndexerPanel(tk.Tk):
         try:
             runtime_context = load_runtime_context()
             image, path = load_screenshot(runtime_context)
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, ValueError) as exc:
             self.status.set(str(exc))
             return
         region = get_model_input_region(runtime_context, image)
@@ -117,7 +117,7 @@ class PerceptionIndexerPanel(tk.Tk):
     def run_indexer(self) -> None:
         try:
             self.layout_index = build_layout_index(ocr_backend=self.ocr_backend.get())
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, ValueError) as exc:
             self.status.set(str(exc))
             return
         self.status.set("Indexer complete")

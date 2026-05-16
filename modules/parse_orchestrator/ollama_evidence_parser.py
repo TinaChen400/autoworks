@@ -292,8 +292,15 @@ def parsed_page_from_compact_response(
         raise ValidationError("Ollama compact parse did not return grounded option_text_ids.")
 
     question_groups = _infer_yes_no_question_groups_from_evidence(evidence)
+    duplicate_yes_no_cards = _has_duplicate_yes_no_card_questions(evidence)
     if question_groups:
-        return _parsed_page_from_question_groups(compact, question_groups, evidence, runtime_context)
+        return _parsed_page_from_question_groups(
+            compact,
+            question_groups,
+            evidence,
+            runtime_context,
+            requires_review=True,
+        )
 
     stem_texts = [text_by_id[text_id]["text"] for text_id in question_text_ids if text_id in text_by_id]
     stem_bbox = _union_bbox([text_by_id[text_id].get("bbox_norm") for text_id in question_text_ids])
@@ -320,6 +327,13 @@ def parsed_page_from_compact_response(
         )
 
     uncertainties = compact.get("uncertainties") if isinstance(compact.get("uncertainties"), list) else []
+    if duplicate_yes_no_cards:
+        uncertainties = list(uncertainties) + [
+            {
+                "type": "duplicate_yes_no_card_stack",
+                "message": "Repeated Yes/No card questions were visible; active card selection requires human review.",
+            }
+        ]
     confidence = _effective_confidence(compact.get("confidence"), bool(stem_texts), bool(options))
     return {
         "task_id": str(runtime_context.get("task_id") or evidence.get("task_id") or ""),
@@ -347,7 +361,7 @@ def parsed_page_from_compact_response(
                 "media": [],
                 "matrix": None,
                 "confidence": confidence,
-                "requires_human_review": False,
+                "requires_human_review": duplicate_yes_no_cards,
             }
         ],
         "navigation_buttons": [],
@@ -356,6 +370,7 @@ def parsed_page_from_compact_response(
             for item in uncertainties
             if isinstance(item, dict) and item.get("type") and item.get("message")
         ],
+        "requires_human_review": duplicate_yes_no_cards,
     }
 
 
@@ -364,6 +379,7 @@ def _parsed_page_from_question_groups(
     question_groups: list[dict[str, list[str]]],
     evidence: dict[str, Any],
     runtime_context: dict[str, Any],
+    requires_review: bool = False,
 ) -> dict[str, Any]:
     text_by_id = {str(item.get("text_id")): item for item in evidence.get("texts", []) if item.get("text_id")}
     option_by_text_id = {
@@ -411,7 +427,7 @@ def _parsed_page_from_question_groups(
                 "media": [],
                 "matrix": None,
                 "confidence": confidence,
-                "requires_human_review": False,
+                "requires_human_review": requires_review,
             }
         )
     confidence = min([question["confidence"] for question in questions] or [0.0])
@@ -430,7 +446,18 @@ def _parsed_page_from_question_groups(
                 "type": "model_format_repair",
                 "message": "Recovered repeated Yes/No question groups from grounded OCR evidence.",
             }
-        ],
+        ]
+        + (
+            [
+                {
+                    "type": "duplicate_yes_no_card_stack",
+                    "message": "Repeated Yes/No card questions were visible; active card selection requires human review.",
+                }
+            ]
+            if requires_review
+            else []
+        ),
+        "requires_human_review": requires_review,
     }
 
 
@@ -551,6 +578,57 @@ def _infer_yes_no_question_groups_from_evidence(evidence: dict[str, Any]) -> lis
     return groups
 
 
+def _has_duplicate_yes_no_card_questions(evidence: dict[str, Any]) -> bool:
+    text_rows = []
+    yes_no_rows = []
+    for item in evidence.get("texts", []):
+        if not isinstance(item, dict):
+            continue
+        text_id = str(item.get("text_id") or "")
+        text = _clean_text(str(item.get("text") or ""))
+        y = _bbox_y(item.get("bbox_norm"))
+        if not text_id or y is None:
+            continue
+        row = {
+            "text_id": text_id,
+            "text": text,
+            "normalized": _letters_only(text),
+            "y": y,
+            "region_id": str(item.get("region_id") or ""),
+        }
+        if _normalized_yes_no_label(text) in {"yes", "no"}:
+            yes_no_rows.append(row)
+        elif _looks_like_yes_no_question_text(text):
+            text_rows.append(row)
+
+    seen_questions: dict[str, int] = {}
+    for row in text_rows:
+        region_id = row["region_id"]
+        has_nearby_yes_no = any(
+            (not region_id or not yn["region_id"] or yn["region_id"] == region_id)
+            and 0 < yn["y"] - row["y"] <= 0.18
+            for yn in yes_no_rows
+        )
+        if has_nearby_yes_no:
+            key = row["normalized"]
+            seen_questions[key] = seen_questions.get(key, 0) + 1
+    return any(count > 1 for count in seen_questions.values())
+
+
+def _looks_like_yes_no_question_text(value: str) -> bool:
+    normalized = _letters_only(value)
+    if not normalized or _looks_like_stop_text(value):
+        return False
+    return (
+        normalized.startswith("doyou")
+        or "benefitsdecisionprocess" in normalized
+        or "placeofemployment" in normalized
+        or "planponsor" in normalized
+        or "plansponsor" in normalized
+        or "hrorbenefitsmanager" in normalized
+    )
+
+
 def _region_for_text_id(text_by_id: dict[str, dict[str, Any]], text_id: str) -> str:
     return str((text_by_id.get(text_id) or {}).get("region_id") or "")
 
@@ -656,7 +734,7 @@ def _remove_concept_body_candidates(
     return [
         candidate
         for candidate in candidates
-        if candidate[0] < concept_top or candidate[0] >= first_explicit_option_top - 0.005
+        if candidate[0] >= first_explicit_option_top - 0.005
     ]
 
 

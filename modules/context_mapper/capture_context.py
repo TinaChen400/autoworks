@@ -13,7 +13,6 @@ from modules.context_mapper.schema import AnchorFrame, BoundingBox, ImageSize, R
 from modules.context_mapper.task_context_loader import load_effective_task_context
 from modules.window_capture.capture import (
     DEFAULT_ANCHOR,
-    DEFAULT_CAPTURE_PATH,
     DEFAULT_CONFIG_PATH,
     PROJECT_ROOT,
     ensure_anchor_profile,
@@ -21,13 +20,14 @@ from modules.window_capture.capture import (
 )
 
 DEFAULT_RUNTIME_STATE_DIR = PROJECT_ROOT / "runtime_state"
+DEFAULT_RUNTIME_CAPTURE_PATH = DEFAULT_RUNTIME_STATE_DIR / "latest_capture.png"
 DEFAULT_RUNTIME_CONTEXT_PATH = DEFAULT_RUNTIME_STATE_DIR / "latest_runtime_context.json"
 DEFAULT_CAPTURE_PROVENANCE_PATH = DEFAULT_RUNTIME_STATE_DIR / "latest_capture_provenance.json"
 
 
 def build_runtime_context(
     task_id: str,
-    screenshot_path: Path = DEFAULT_CAPTURE_PATH,
+    screenshot_path: Path = DEFAULT_RUNTIME_CAPTURE_PATH,
     output_path: Path = DEFAULT_RUNTIME_CONTEXT_PATH,
 ) -> dict[str, Any]:
     task_context = load_effective_task_context(task_id)
@@ -160,7 +160,7 @@ def build_regions(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate runtime context for a task.")
     parser.add_argument("--task", required=True, help="Task id, for example tts01")
-    parser.add_argument("--screenshot", default=str(DEFAULT_CAPTURE_PATH))
+    parser.add_argument("--screenshot", default=str(DEFAULT_RUNTIME_CAPTURE_PATH))
     parser.add_argument("--output", default=str(DEFAULT_RUNTIME_CONTEXT_PATH))
     args = parser.parse_args()
     data = build_runtime_context(args.task, Path(args.screenshot), Path(args.output))

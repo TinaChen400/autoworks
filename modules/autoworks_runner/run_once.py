@@ -253,10 +253,19 @@ def run_once(
                 status = "not_allowed"
                 result["summary"] = reason
         elif status == "success" and step.name == "human_review":
-            approved, reason = human_review_approved(runtime_state_dir, run_started_at=run_started_at)
-            if not approved:
-                status = "waiting_review"
-                result["summary"] = reason
+            if mode == "click-once":
+                approved, reason = human_review_approved(runtime_state_dir, run_started_at=run_started_at)
+                if not approved:
+                    status = "waiting_review"
+                    result["summary"] = reason
+            else:
+                clear, reason = human_review_clear_for_preview(
+                    runtime_state_dir,
+                    run_started_at=run_started_at,
+                )
+                if not clear:
+                    status = "waiting_review"
+                    result["summary"] = reason
         state.finish_step(
             step.name,
             status,
@@ -960,6 +969,8 @@ def parse_quality_issues(orchestrated: dict[str, Any], *, allow_fake: bool) -> l
         issues.append("fake parser output is schema-valid only and is not accepted")
 
     parsed_page = orchestrated.get("parsed_page") or {}
+    if parsed_page_requires_human_review(parsed_page) or orchestrated.get("requires_human_review") is True:
+        issues.append("needs_human_review: parse output requires human review")
     questions = parsed_page.get("questions") or []
     page = parsed_page.get("page") or {}
     page_type = str(page.get("page_type") or "").lower()
@@ -983,6 +994,12 @@ def parse_quality_issues(orchestrated: dict[str, Any], *, allow_fake: bool) -> l
 
     answer_options = first_question.get("answer_options") or []
     input_fields = first_question.get("input_fields") or []
+    developer_content = suspicious_developer_content(first_question, answer_options)
+    if developer_content:
+        issues.append(
+            "blocked: captured content looks like a developer/local window, not the survey page: "
+            + developer_content
+        )
     if not answer_options and not input_fields:
         issues.append("answer_options and input_fields are both empty")
     if page_type == "image_task" and visual_elements and not answer_options and not navigation_buttons:
@@ -994,6 +1011,41 @@ def parse_quality_issues(orchestrated: dict[str, Any], *, allow_fake: bool) -> l
     elif confidence < 0.5:
         issues.append(f"parse confidence is too low: {confidence}")
     return issues
+
+
+def parsed_page_requires_human_review(parsed_page: dict[str, Any]) -> bool:
+    if parsed_page.get("requires_human_review") is True:
+        return True
+    page = parsed_page.get("page") if isinstance(parsed_page.get("page"), dict) else {}
+    if page.get("requires_human_review") is True:
+        return True
+    questions = parsed_page.get("questions") or []
+    return any(isinstance(question, dict) and question.get("requires_human_review") is True for question in questions)
+
+
+def suspicious_developer_content(first_question: dict[str, Any], answer_options: list[Any]) -> str:
+    texts = []
+    stem = first_question.get("question_stem") if isinstance(first_question.get("question_stem"), dict) else {}
+    texts.append(str(stem.get("text") or ""))
+    for option in answer_options:
+        if isinstance(option, dict):
+            texts.append(str(option.get("text") or ""))
+            texts.append(str(option.get("raw_text") or ""))
+    combined = " ".join(texts).casefold()
+    indicators = [
+        "visual studio code",
+        "browser_ctrl.py",
+        "antigravity",
+        "open agent manager",
+        "import time",
+        "powershell",
+        "from utils.",
+        "def ",
+    ]
+    hits = [indicator for indicator in indicators if indicator in combined]
+    if not hits:
+        return ""
+    return ", ".join(hits[:4])
 
 
 def parse_confidence(parsed_page: dict[str, Any], first_question: dict[str, Any]) -> float | None:
@@ -1246,6 +1298,35 @@ def human_review_approved(
     if not approval_exists:
         return False, "human review approval is missing"
     return True, "human review approved"
+
+
+def human_review_clear_for_preview(
+    runtime_state_dir: Path,
+    *,
+    run_started_at: datetime,
+) -> tuple[bool, str]:
+    report_path = runtime_state_dir / "latest_human_review_report.json"
+    decision_path = runtime_state_dir / "latest_reviewed_answer_decision.json"
+    if missing_outputs({"report": report_path}, min_mtime=run_started_at):
+        return False, "human review report is missing or stale"
+    report = read_json(report_path)
+    decision = (
+        read_json(decision_path)
+        if not missing_outputs({"decision": decision_path}, min_mtime=run_started_at)
+        else {}
+    )
+    if report.get("requires_human_review") is True or decision.get("requires_human_review") is True:
+        return False, "waiting for human review"
+    unresolved = report.get("unresolved_question_ids") or decision.get("unresolved_question_ids") or []
+    if unresolved:
+        return False, "unresolved review items: " + ", ".join(str(item) for item in unresolved)
+    if report.get("validation_passed") is False:
+        return False, "; ".join(str(issue) for issue in report.get("issues", ["review validation failed"]))
+    if decision.get("status") in {"rejected", "blocked"}:
+        return False, f"human review status is {decision['status']}"
+    if decision.get("approved") is False:
+        return False, "human review rejected approval"
+    return True, "human review not required for preview"
 
 
 def approved_action_plan_exists(

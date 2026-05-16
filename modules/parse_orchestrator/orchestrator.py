@@ -52,6 +52,18 @@ def _parsed_page_is_actionable(parsed_page: dict[str, Any]) -> bool:
     return False
 
 
+def _parsed_page_requires_human_review(parsed_page: dict[str, Any]) -> bool:
+    if parsed_page.get("requires_human_review") is True:
+        return True
+    page = parsed_page.get("page") if isinstance(parsed_page.get("page"), dict) else {}
+    if page.get("requires_human_review") is True:
+        return True
+    questions = parsed_page.get("questions")
+    if not isinstance(questions, list):
+        return False
+    return any(isinstance(question, dict) and question.get("requires_human_review") is True for question in questions)
+
+
 def _fallback_plan_from_overview(plan_data: dict[str, Any]) -> dict[str, Any]:
     fallback = dict(plan_data)
     selected_images = [str(item) for item in fallback.get("selected_input_images", [])]
@@ -148,6 +160,7 @@ def run_orchestrated_parse(
     requires_human_review = (
         plan.selected_strategy == "manual_review_required"
         or not metrics.validation_passed
+        or _parsed_page_requires_human_review(vision_result.parsed_page)
         or not _parsed_page_is_actionable(vision_result.parsed_page)
         or "ambiguous" in " ".join(warnings).lower()
     )

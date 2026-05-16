@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -60,6 +60,32 @@ def first_question_decision(decision: dict[str, Any]) -> dict[str, Any]:
     if isinstance(questions, list) and questions and isinstance(questions[0], dict):
         return questions[0]
     return {}
+
+
+def current_answer_approval_input(decision: dict[str, Any]) -> dict[str, Any]:
+    approvals = []
+    for qd in decision.get("question_decisions", []):
+        if not isinstance(qd, dict):
+            continue
+        question_id = str(qd.get("question_id", ""))
+        option_ids = [str(option_id) for option_id in qd.get("recommended_option_ids", []) if str(option_id)]
+        text_answer = str(qd.get("recommended_text_answer", ""))
+        if not question_id or (not option_ids and not text_answer):
+            continue
+        approvals.append(
+            {
+                "question_id": question_id,
+                "approved_option_ids": option_ids,
+                "approved_text_answer": text_answer,
+                "review_note": "Human approved current dashboard recommendation.",
+            }
+        )
+    return {
+        "source_decision_id": decision.get("decision_id", ""),
+        "session_id": decision.get("session_id", ""),
+        "task_id": decision.get("task_id", ""),
+        "approvals": approvals,
+    }
 
 
 def first_action(plan: dict[str, Any]) -> dict[str, Any]:
@@ -701,6 +727,12 @@ def render_controls(target_locked: bool, summary: dict[str, Any]) -> str:
             "Run Dry-Run Executor",
             can_run.get("executor_dry_run"),
         ),
+        control_form(
+            "/approve-current-answer",
+            "Approve Current Answer",
+            summary.get("answer", {}).get("status") == "blocked"
+            and bool(summary.get("answer", {}).get("recommended_option_ids")),
+        ),
         (
             '<form method="post" action="/run-preview">'
             f'<button class="primary"{run_disabled}>Run Full Dry Preview</button></form>'
@@ -910,7 +942,8 @@ def render_target_candidates(target_candidates: dict[str, Any]) -> str:
     if not candidates:
         return '<div class="muted">No candidate snapshot found.</div>'
     rows = []
-    for index, candidate in enumerate(candidates):
+    sorted_candidates = sorted(candidates, key=target_candidate_sort_key)
+    for index, candidate in enumerate(sorted_candidates):
         hwnd = candidate.get("hwnd", "")
         checked = " checked" if index == 0 else ""
         rows.append(
@@ -929,6 +962,22 @@ def render_target_candidates(target_candidates: dict[str, Any]) -> str:
         + "".join(rows)
         + '</tbody></table><p><button>Lock Target to Anchor</button></p></form>'
     )
+
+
+def target_candidate_sort_key(candidate: dict[str, Any]) -> tuple[int, int, str]:
+    title = str(candidate.get("title", "")).lower()
+    class_name = str(candidate.get("class_name", "")).lower()
+    bbox = candidate.get("bbox") or {}
+    area = int(bbox.get("width") or 0) * int(bbox.get("height") or 0)
+    if title == "tina":
+        priority = 0
+    elif "flutter" in class_name or "oray" in class_name:
+        priority = 1
+    elif "dashboard" in title or "visual studio code" in title:
+        priority = 3
+    else:
+        priority = 2
+    return (priority, -area, title)
 
 
 def first_existing(paths: list[Path]) -> Path | None:
@@ -1008,7 +1057,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
     runtime_state_dir = RUNTIME_STATE_DIR
 
     def do_GET(self) -> None:
-        if self.path not in {"/", "/index.html"}:
+        path = urlsplit(self.path).path
+        if path not in {"/", "/index.html"}:
             self.send_error(404)
             return
         body = render_dashboard(self.runtime_state_dir).encode("utf-8")
@@ -1044,6 +1094,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 from modules.window_capture.target_lock import capture_locked_target
 
                 capture_locked_target(runtime_state_dir=self.runtime_state_dir)
+                self.redirect_home()
+                return
+            if self.path == "/approve-current-answer":
+                decision = read_json(self.runtime_state_dir / "latest_answer_decision.json")
+                manual_input = current_answer_approval_input(decision)
+                if not manual_input.get("source_decision_id") or not manual_input.get("approvals"):
+                    self.write_action_error("No current answer recommendation is available to approve.")
+                    self.redirect_home()
+                    return
+                write_json(self.runtime_state_dir / "manual_review_input.json", manual_input)
+                command = [
+                    sys.executable,
+                    "-m",
+                    "modules.human_review.human_review_processor",
+                    "--source",
+                    "auto",
+                ]
+                self.run_dashboard_command(command)
                 self.redirect_home()
                 return
             if self.path == "/run-preview":

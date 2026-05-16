@@ -41,3 +41,9 @@ def test_anchor_frame_from_capture_provenance_uses_capture_region_not_window_rec
         "width": 1920,
         "height": 1080,
     }
+
+
+def test_build_runtime_context_defaults_to_runtime_capture_path() -> None:
+    defaults = capture_context.build_runtime_context.__defaults__
+    assert defaults is not None
+    assert defaults[0] == capture_context.DEFAULT_RUNTIME_CAPTURE_PATH

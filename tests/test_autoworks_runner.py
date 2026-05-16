@@ -15,6 +15,7 @@ from modules.autoworks_runner.run_once import (
     NO_LOCKED_TARGET_MESSAGE,
     NO_VALID_CAPTURE_MESSAGE,
     PIPELINE_STEPS,
+    parse_quality_issues,
     run_once,
 )
 
@@ -62,6 +63,54 @@ def test_pipeline_state_writes_snapshot_and_events(tmp_path: Path) -> None:
         "step_finished",
         "pipeline_finished",
     ]
+
+
+def test_parse_quality_blocks_developer_window_content() -> None:
+    issues = parse_quality_issues(
+        {
+            "parsed_page": {
+                "page": {"page_type": "questionnaire", "confidence": 0.9},
+                "questions": [
+                    {
+                        "question_type": "single_choice",
+                        "question_stem": {"text": "Reviewing Interview Automation Progress"},
+                        "answer_options": [
+                            {"option_id": "T1", "text": "File"},
+                            {"option_id": "T2", "text": "Edit"},
+                            {"option_id": "T3", "text": "browser_ctrl.py"},
+                        ],
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        },
+        allow_fake=False,
+    )
+
+    assert any("developer/local window" in issue for issue in issues)
+
+
+def test_parse_quality_waits_when_parse_requires_review() -> None:
+    issues = parse_quality_issues(
+        {
+            "parsed_page": {
+                "requires_human_review": True,
+                "page": {"page_type": "questionnaire", "confidence": 0.9},
+                "questions": [
+                    {
+                        "question_type": "single_choice",
+                        "question_stem": {"text": "Question?"},
+                        "answer_options": [{"option_id": "T1", "text": "Yes"}],
+                        "requires_human_review": True,
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        },
+        allow_fake=False,
+    )
+
+    assert "needs_human_review: parse output requires human review" in issues
 
 
 def test_required_skipped_step_causes_overall_status_blocked(monkeypatch, tmp_path: Path) -> None:
@@ -801,6 +850,63 @@ def test_successful_required_steps_produce_waiting_review(monkeypatch, tmp_path:
     assert statuses["human_review"] == "waiting_review"
     assert statuses["action_executor"] == "blocked"
     assert set(statuses) == set(PIPELINE_STEPS)
+
+
+def test_preview_does_not_require_explicit_human_approval_when_review_clear(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run_pipeline_step(step, **kwargs):
+        if step.name == "window_capture":
+            return fake_capture(tmp_path)
+        if step.name == "existing_capture_check":
+            return write_existing_capture_check_result(tmp_path)
+        if step.name == "context_mapper":
+            write_context(tmp_path)
+        if step.name == "perception_indexer":
+            write_perception(tmp_path)
+        if step.name == "parse_orchestrator":
+            write_parse(tmp_path, selected_mode="doubao", question_text="What now?", options=["Yes"])
+        if step.name == "execution_gate":
+            (tmp_path / "latest_execution_gate.json").write_text(
+                json.dumps({"execution_allowed": True, "status": "allowed"}),
+                encoding="utf-8",
+            )
+            (tmp_path / "latest_execution_gate_report.json").write_text(
+                json.dumps({"validation_passed": True, "issues": []}),
+                encoding="utf-8",
+            )
+        if step.name == "human_review":
+            (tmp_path / "latest_human_review_report.json").write_text(
+                json.dumps(
+                    {
+                        "validation_passed": True,
+                        "requires_human_review": False,
+                        "unresolved_question_ids": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (tmp_path / "latest_reviewed_answer_decision.json").write_text(
+                json.dumps({"requires_human_review": False}),
+                encoding="utf-8",
+            )
+        return {
+            "status": "success",
+            "summary": f"{step.name} ok",
+            "output_paths": {},
+            "warnings": [],
+            "errors": [],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr("modules.autoworks_runner.run_once.run_pipeline_step", fake_run_pipeline_step)
+
+    result = run_once(mode="preview", runtime_state_dir=tmp_path)
+
+    statuses = {step["name"]: step["status"] for step in result["steps"]}
+    assert statuses["human_review"] == "success"
+    assert statuses["click_preview"] == "success"
 
 
 def test_click_once_does_not_execute_without_approval(monkeypatch, tmp_path: Path) -> None:

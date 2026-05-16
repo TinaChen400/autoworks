@@ -324,6 +324,8 @@ def _layout_with_comparison_choice_evidence(tmp_path: Path) -> dict:
             "click_point_norm": click_point,
         }
         for text_id, region_id, control_type, click_point in [
+            ("T18", "R10", "unknown", {"x": 0.51, "y": 0.31}),
+            ("T21", "R11", "icon_like", {"x": 0.5, "y": 0.4}),
             ("T25", "R11", "icon_like", {"x": 0.36, "y": 0.52}),
             ("T26", "R12", "checkbox_like", {"x": 0.36, "y": 0.58}),
             ("T27", "R13", "checkbox_like", {"x": 0.36, "y": 0.63}),
@@ -340,6 +342,8 @@ def _layout_with_comparison_choice_evidence(tmp_path: Path) -> dict:
             "confidence": confidence,
         }
         for text_id, relationship_type, confidence in [
+            ("T18", "nearby_text", 0.35),
+            ("T21", "nearby_text", 0.35),
             ("T25", "nearby_text", 0.35),
             ("T26", "possible_option_label", 0.6),
             ("T27", "nearby_text", 0.35),
@@ -739,6 +743,8 @@ def test_ollama_evidence_parse_repairs_yes_no_response_drift(tmp_path: Path) -> 
     assert [option["option_id"] for option in question["answer_options"]] == ["T2", "T3"]
     assert [option["text"] for option in question["answer_options"]] == ["Yes", "No"]
     assert [option["raw_text"] for option in question["answer_options"]] == ["OYes", "ONo"]
+    assert parsed["requires_human_review"] is True
+    assert question["requires_human_review"] is True
 
 
 def test_ollama_evidence_parse_recovers_repeated_yes_no_cards(tmp_path: Path) -> None:
@@ -762,6 +768,11 @@ def test_ollama_evidence_parse_recovers_repeated_yes_no_cards(tmp_path: Path) ->
         [option["option_id"] for option in question["answer_options"]]
         for question in parsed["questions"]
     ] == [["T2", "T3"], ["T5", "T6"]]
+    assert parsed["requires_human_review"] is True
+    assert all(question["requires_human_review"] is True for question in parsed["questions"])
+    assert "duplicate_yes_no_card_stack" in {
+        uncertainty["type"] for uncertainty in parsed["uncertainties"]
+    }
 
 
 def test_ollama_evidence_parse_repairs_comparison_choice_response_drift(tmp_path: Path) -> None:
@@ -902,6 +913,57 @@ def test_orchestrator_uses_ollama_evidence_mode(
     assert report["model_calls_count"] == 1
     assert report["validation_passed"] is True
     assert report["requires_human_review"] is False
+
+
+def test_orchestrator_propagates_parsed_page_human_review(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_context = _runtime_context(tmp_path)
+    layout = _layout_with_option_evidence(tmp_path)
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.load_runtime_context",
+        lambda: runtime_context,
+    )
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_layout_index", lambda: layout)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.load_config", _config)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_plan", lambda _p: None)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_parse_metrics", lambda _m: None)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_orchestrated_parse", lambda _p: None)
+    monkeypatch.setattr("modules.parse_orchestrator.orchestrator.save_report", lambda _r: None)
+
+    def fake_run_ollama(plan: dict, layout_index: dict, runtime_context: dict, config: dict) -> object:
+        from modules.parse_orchestrator.ollama_evidence_parser import OllamaEvidenceResult
+
+        return OllamaEvidenceResult(
+            parsed_page={
+                "requires_human_review": True,
+                "page": {"page_type": "questionnaire", "confidence": 0.9},
+                "questions": [
+                    {
+                        "question_id": "q1",
+                        "question_type": "single_choice",
+                        "question_stem": {"text": "Question?"},
+                        "answer_options": [{"option_id": "T2", "text": "Option"}],
+                        "requires_human_review": True,
+                    }
+                ],
+            },
+            validation_report={"validation_passed": True},
+            model_calls_count=1,
+            validation_passed=True,
+        )
+
+    monkeypatch.setattr(
+        "modules.parse_orchestrator.orchestrator.run_ollama_evidence_parse",
+        fake_run_ollama,
+    )
+
+    report = run_orchestrated_parse(mode="ollama")
+
+    assert report["validation_passed"] is True
+    assert report["requires_human_review"] is True
 
 
 def test_orchestrator_does_not_doubao_fallback_after_ollama_failure(

@@ -3,8 +3,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from unittest.mock import Mock
 
-from modules.dashboard.app import DashboardHandler, build_runtime_summary, render_dashboard
+from modules.dashboard.app import (
+    DashboardHandler,
+    build_runtime_summary,
+    current_answer_approval_input,
+    render_dashboard,
+)
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -164,12 +170,16 @@ def test_human_review_blocks_downstream_controls(tmp_path: Path) -> None:
     write_json(
         tmp_path / "latest_answer_decision.json",
         {
+            "decision_id": "decision_review_required",
+            "session_id": "session_1",
+            "task_id": "tts01",
             "requires_human_review": True,
             "question_decisions": [
                 {
+                    "question_id": "q1",
                     "answer_strategy": "profile_llm_strategy",
                     "answer_mode": "strict_private",
-                    "recommended_option_ids": [],
+                    "recommended_option_ids": ["T29"],
                 }
             ],
         },
@@ -182,6 +192,35 @@ def test_human_review_blocks_downstream_controls(tmp_path: Path) -> None:
     assert summary["can_run"]["action_plan"] is False
     assert "answer requires human review" in summary["answer"]["blocked_reason"]
     assert 'action="/run-action-plan"><button disabled>' in html
+    assert 'action="/approve-current-answer"><button>Approve Current Answer</button>' in html
+
+
+def test_current_answer_approval_input_uses_latest_decision() -> None:
+    approval = current_answer_approval_input(
+        {
+            "decision_id": "decision_latest",
+            "session_id": "session_latest",
+            "task_id": "tts01",
+            "question_decisions": [
+                {
+                    "question_id": "q1",
+                    "recommended_option_ids": ["T29"],
+                    "recommended_text_answer": "",
+                }
+            ],
+        }
+    )
+
+    assert approval["source_decision_id"] == "decision_latest"
+    assert approval["session_id"] == "session_latest"
+    assert approval["approvals"] == [
+        {
+            "question_id": "q1",
+            "approved_option_ids": ["T29"],
+            "approved_text_answer": "",
+            "review_note": "Human approved current dashboard recommendation.",
+        }
+    ]
 
 
 def test_reviewed_answer_unblocks_real_click_controls(tmp_path: Path) -> None:
@@ -382,6 +421,48 @@ def test_render_dashboard_shows_anchor_mismatch_target_status(tmp_path: Path) ->
     assert "Target window rect" in html
     assert "does not match the anchor frame" in html
     assert "Lock Target to Anchor" in html
+
+
+def test_target_candidates_default_to_tina_before_editor_windows(tmp_path: Path) -> None:
+    write_json(
+        tmp_path / "latest_target_candidates.json",
+        {
+            "ok": True,
+            "candidates": [
+                {
+                    "hwnd": 10,
+                    "title": "autoworks - Visual Studio Code",
+                    "class_name": "Chrome_WidgetWin_1",
+                    "bbox": {"left": 2000, "top": 200, "width": 1600, "height": 1400},
+                },
+                {
+                    "hwnd": 20,
+                    "title": "Tina",
+                    "class_name": "FlutterMultiWindow",
+                    "bbox": {"left": 100, "top": 80, "width": 1920, "height": 1080},
+                },
+            ],
+        },
+    )
+
+    html = render_dashboard(tmp_path)
+
+    assert 'value="20" checked' in html
+    assert html.index("Tina") < html.index("Visual Studio Code")
+
+
+def test_dashboard_get_accepts_empty_query_string(tmp_path: Path) -> None:
+    handler = object.__new__(DashboardHandler)
+    handler.path = "/?"
+    handler.runtime_state_dir = tmp_path
+    handler.send_response = Mock()
+    handler.send_header = Mock()
+    handler.end_headers = Mock()
+    handler.wfile = Mock()
+
+    DashboardHandler.do_GET(handler)
+
+    handler.send_response.assert_called_once_with(200)
 
 
 def test_preview_block_preserves_existing_target_lock_diagnostics(tmp_path: Path) -> None:

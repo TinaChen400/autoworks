@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
+from modules.perception_indexer import image_loader
 from modules.perception_indexer.annotator import save_annotated_overview
 from modules.perception_indexer.card_detector import detect_card_regions, detect_web_viewport
 from modules.perception_indexer.crop_quality import compute_crop_quality, expand_and_clamp_crop
@@ -25,6 +27,7 @@ from modules.perception_indexer.grouping import (
 )
 from modules.perception_indexer.index_store import read_json, write_json
 from modules.perception_indexer.indexer import build_layout_index
+from modules.perception_indexer.image_loader import load_screenshot
 from modules.perception_indexer.element_detector import detect_text_left_controls
 from modules.perception_indexer.ocr_layer import run_ocr
 from modules.perception_indexer.schema import (
@@ -185,6 +188,24 @@ def test_indexer_builds_layout_with_ocr_disabled(tmp_path: Path, monkeypatch) ->
     assert layout["regions"][0]["region_id"].startswith("R")
     assert Path(layout["annotated_overview"]).exists()
     assert Path("runtime_state/latest_layout_index.json").exists()
+
+
+def test_load_screenshot_rejects_context_not_pointing_at_runtime_capture(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime_dir = tmp_path / "runtime_state"
+    runtime_dir.mkdir()
+    runtime_capture = runtime_dir / "latest_capture.png"
+    fixture_capture = tmp_path / "tests" / "fixtures" / "latest_capture.png"
+    fixture_capture.parent.mkdir(parents=True)
+    Image.new("RGB", (10, 10), "white").save(runtime_capture)
+    Image.new("RGB", (10, 10), "black").save(fixture_capture)
+    monkeypatch.setattr(image_loader, "RUNTIME_CAPTURE_PATH", runtime_capture)
+    monkeypatch.setattr(image_loader, "CAPTURE_PROVENANCE_PATH", runtime_dir / "missing.json")
+
+    with pytest.raises(ValueError, match="runtime_state/latest_capture.png"):
+        load_screenshot({"screenshot_path": str(fixture_capture)})
 
 
 def test_card_region_creation_from_clustered_elements() -> None:

@@ -311,7 +311,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         layout_index = build_layout_index(ocr_backend=args.ocr)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         print(str(exc))
         raise SystemExit(1) from exc
     print(f"Saved layout index to {LAYOUT_INDEX_PATH}")
