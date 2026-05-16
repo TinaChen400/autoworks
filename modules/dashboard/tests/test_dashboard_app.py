@@ -184,6 +184,73 @@ def test_human_review_blocks_downstream_controls(tmp_path: Path) -> None:
     assert 'action="/run-action-plan"><button disabled>' in html
 
 
+def test_reviewed_answer_unblocks_real_click_controls(tmp_path: Path) -> None:
+    write_ready_chain(tmp_path)
+    raw_decision = json.loads(
+        (tmp_path / "latest_answer_decision.json").read_text(encoding="utf-8")
+    )
+    raw_decision["requires_human_review"] = True
+    raw_decision["question_decisions"][0]["requires_human_review"] = True
+    write_json(tmp_path / "latest_answer_decision.json", raw_decision)
+    reviewed_decision = dict(raw_decision)
+    reviewed_decision["source_decision_id"] = raw_decision["decision_id"]
+    reviewed_decision["requires_human_review"] = False
+    reviewed_decision["question_decisions"][0] = dict(raw_decision["question_decisions"][0])
+    reviewed_decision["question_decisions"][0]["requires_human_review"] = False
+    reviewed_decision["question_decisions"][0]["confidence"] = 1.0
+    reviewed_decision["question_decisions"][0]["approval_source"] = "manual_review"
+    write_json(tmp_path / "latest_reviewed_answer_decision.json", reviewed_decision)
+    write_json(
+        tmp_path / "latest_human_review_report.json",
+        {
+            "validation_passed": True,
+            "source_decision_id": raw_decision["decision_id"],
+            "requires_human_review": False,
+            "issues": [],
+        },
+    )
+    write_json(
+        tmp_path / "latest_answer_engine_report.json",
+        {
+            "validation_passed": False,
+            "requires_human_review": True,
+            "issues": [],
+            "warnings": [],
+        },
+    )
+    write_json(
+        tmp_path / "latest_locked_target.json",
+        {
+            "target_locked": True,
+            "target_window_title": "Tina",
+            "target_window_handle": 123,
+        },
+    )
+    touch_in_order(
+        [
+            tmp_path / "latest_orchestrated_parse.json",
+            tmp_path / "latest_answer_decision.json",
+            tmp_path / "latest_answer_engine_report.json",
+            tmp_path / "latest_reviewed_answer_decision.json",
+            tmp_path / "latest_human_review_report.json",
+            tmp_path / "latest_action_plan.json",
+            tmp_path / "latest_action_plan_report.json",
+            tmp_path / "latest_resolved_action_plan.json",
+            tmp_path / "latest_target_resolver_report.json",
+            tmp_path / "latest_execution_gate.json",
+            tmp_path / "latest_execution_gate_report.json",
+        ]
+    )
+
+    summary = build_runtime_summary(tmp_path)
+    html = render_dashboard(tmp_path)
+
+    assert summary["answer"]["status"] == "ready"
+    assert summary["answer"]["review_applied"] is True
+    assert summary["can_run"]["real_click"] is True
+    assert 'action="/run-real-click-once"><button class="danger">' in html
+
+
 def test_new_blocked_parse_disables_stale_gate_and_executor(tmp_path: Path) -> None:
     write_ready_chain(tmp_path)
     write_json(

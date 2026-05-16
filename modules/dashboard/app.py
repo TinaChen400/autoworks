@@ -161,6 +161,8 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     parse_report_path = runtime_state_dir / "latest_parse_orchestrator_report.json"
     answer_report_path = runtime_state_dir / "latest_answer_engine_report.json"
     decision_path = runtime_state_dir / "latest_answer_decision.json"
+    reviewed_decision_path = runtime_state_dir / "latest_reviewed_answer_decision.json"
+    human_review_report_path = runtime_state_dir / "latest_human_review_report.json"
     action_plan_report_path = runtime_state_dir / "latest_action_plan_report.json"
     action_plan_path = runtime_state_dir / "latest_action_plan.json"
     target_report_path = runtime_state_dir / "latest_target_resolver_report.json"
@@ -174,6 +176,8 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     orchestrated_parse = read_json(runtime_state_dir / "latest_orchestrated_parse.json")
     answer_report = read_json(runtime_state_dir / "latest_answer_engine_report.json")
     decision = read_json(runtime_state_dir / "latest_answer_decision.json")
+    reviewed_decision = read_json(runtime_state_dir / "latest_reviewed_answer_decision.json")
+    human_review_report = read_json(runtime_state_dir / "latest_human_review_report.json")
     action_plan_report = read_json(runtime_state_dir / "latest_action_plan_report.json")
     action_plan = read_json(runtime_state_dir / "latest_action_plan.json")
     target_report = read_json(runtime_state_dir / "latest_target_resolver_report.json")
@@ -184,13 +188,23 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     executor_run = read_json(runtime_state_dir / "latest_action_executor_run.json")
     questions = (orchestrated_parse.get("parsed_page") or {}).get("questions", [])
     question_count = len(questions) if isinstance(questions, list) else 0
-    decision_count = len(decision.get("question_decisions", []) or [])
+    review_applies = (
+        reviewed_decision.get("requires_human_review") is False
+        and human_review_report.get("requires_human_review") is False
+        and ids_match(
+            reviewed_decision.get("source_decision_id"),
+            decision.get("decision_id"),
+        )
+    )
+    effective_decision = reviewed_decision if review_applies else decision
+    effective_decision_path = reviewed_decision_path if review_applies else decision_path
+    decision_count = len(effective_decision.get("question_decisions", []) or [])
     planned_actions = action_rows(action_plan.get("actions", []) or [])
     resolved_actions = action_rows(resolved_plan.get("actions", []) or [])
     executable_actions = action_rows(gate.get("executable_actions", []) or [])
     executor_records = executor_rows(executor_run)
 
-    qd = first_question_decision(decision)
+    qd = first_question_decision(effective_decision)
     resolved_action = first_action(resolved_plan)
     gated_action = first_action(gate)
     target = action_target(gated_action or resolved_action)
@@ -198,8 +212,11 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     parse_human_review = bool_ok(orchestrated_parse.get("requires_human_review")) or bool_ok(
         parse_report.get("requires_human_review")
     )
-    answer_ok = validation_passed(answer_report) and not bool_ok(
-        decision.get("requires_human_review")
+    answer_validation_ok = validation_passed(answer_report) or (
+        review_applies and validation_passed(human_review_report)
+    )
+    answer_ok = answer_validation_ok and not bool_ok(
+        effective_decision.get("requires_human_review")
     )
     action_plan_ok = (
         validation_passed(action_plan_report)
@@ -213,10 +230,13 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
         [parse_metrics_path, orchestrated_parse_path, parse_report_path],
         capture_path,
     )
-    answer_fresh = files_are_after([decision_path, answer_report_path], orchestrated_parse_path)
+    answer_fresh_paths = [effective_decision_path, answer_report_path]
+    if review_applies:
+        answer_fresh_paths.append(human_review_report_path)
+    answer_fresh = files_are_after(answer_fresh_paths, orchestrated_parse_path)
     action_plan_fresh = files_are_after(
         [action_plan_path, action_plan_report_path],
-        decision_path,
+        effective_decision_path,
     )
     target_fresh = files_are_after([resolved_plan_path, target_report_path], action_plan_path)
     gate_fresh = files_are_after([gate_path, gate_report_path], resolved_plan_path)
@@ -255,12 +275,12 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
                 "parse is not ready" if not parse_ready else "",
                 "parse is older than latest capture" if parse_ready and not parse_fresh else "",
                 "answer validation did not pass"
-                if answer_report and not validation_passed(answer_report)
+                if answer_report and not answer_validation_ok
                 else "answer has not run"
                 if not answer_report
                 else "",
                 "answer requires human review"
-                if decision.get("requires_human_review") is True
+                if effective_decision.get("requires_human_review") is True
                 else "",
                 "answer is older than latest parse" if answer_ok and not answer_fresh else "",
             ],
@@ -348,7 +368,8 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
                 [target.get("option_text"), target.get("text"), *option_texts(qd)]
             ),
             "requires_human_review": decision.get("requires_human_review", ""),
-            "validation_passed": validation_passed(answer_report),
+            "review_applied": review_applies,
+            "validation_passed": answer_validation_ok,
             "fresh": answer_fresh,
             "blocked_reason": blockers["answer"],
         },
