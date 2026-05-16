@@ -48,6 +48,17 @@ def validate_decision(decision: dict, parsed_page: dict, config: dict, session: 
 
         options = _option_by_id(question)
         selected_ids = qd.get("recommended_option_ids", [])
+        invalid_option_ids = [option_id for option_id in selected_ids if option_id not in options]
+        if invalid_option_ids:
+            issues.append(
+                {
+                    "type": "invalid_option_id",
+                    "question_id": qd.get("question_id", ""),
+                    "option_ids": invalid_option_ids,
+                    "message": "Recommended option IDs must exist on the current page.",
+                }
+            )
+
         all_selected = [options[option_id] for option_id in selected_ids if is_all_of_the_above(options.get(option_id, {}))]
         if all_selected:
             substantive_count = len([option for option in options.values() if not is_all_of_the_above(option)])

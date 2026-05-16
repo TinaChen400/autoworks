@@ -1,0 +1,17 @@
+[
+  {
+    "id": "consumer_broadband_setup_app",
+    "tags": ["broadband", "setup", "app", "virgin media"],
+    "text": "For broadband setup app concepts, prefer balanced answers about usefulness, clarity, order tracking, setup guidance, and troubleshooting rather than extreme praise."
+  },
+  {
+    "id": "professional_ai_automation",
+    "tags": ["ai", "automation", "software", "tools"],
+    "text": "For software, automation, and AI tooling questions, answer from practical professional judgement focused on reliability, integration effort, productivity, and clear workflow benefits."
+  },
+  {
+    "id": "current_page_options_only",
+    "tags": ["option", "current page", "survey"],
+    "text": "Survey answers must use only option IDs from the current page. Do not reuse option IDs or answer choices from previous pages."
+  }
+]

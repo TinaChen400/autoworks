@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from .answer_context_loader import load_relevant_answer_notes
 from .ollama_answer_client import call_ollama_answerer, extract_json_object
 from .question_classifier import classify_category
 from .schema import click_target_from_option, get_question_text, question_decision
@@ -32,6 +33,7 @@ def decide(
 ) -> dict[str, Any]:
     question_type = str(question.get("question_type") or "unknown")
     answer_mode = determine_answer_mode(question, category, profile)
+    answer_notes = load_relevant_answer_notes(question)
     if not profile_exists and answer_mode == "strict_private":
         decision = question_decision(
             question,
@@ -45,18 +47,20 @@ def decide(
             warnings=["user_profile missing"],
         )
         decision["answer_mode"] = answer_mode
+        decision["used_answer_notes"] = []
+        decision["answer_source"] = "profile_llm_profile_only"
         return decision
     try:
         raw = call_ollama_answerer(
             endpoint=str(config.get("profile_llm_endpoint") or DEFAULT_ENDPOINT),
             model=str(config.get("profile_llm_model") or "qwen2.5:14b"),
-            prompt=build_prompt(question, category, profile, session, config, answer_mode),
+            prompt=build_prompt(question, category, profile, session, config, answer_mode, answer_notes),
             timeout_seconds=int(config.get("profile_llm_timeout_seconds", 90)),
             num_predict=int(config.get("profile_llm_num_predict", 512)),
         )
         response = extract_json_object(raw)
     except Exception as exc:  # noqa: BLE001 - fall back to human review cleanly.
-        return question_decision(
+        decision = question_decision(
             question,
             category,
             "profile_llm_strategy",
@@ -65,8 +69,12 @@ def decide(
             requires_human_review=True,
             human_review_reason="Profile LLM answerer failed.",
         )
+        decision["answer_mode"] = answer_mode
+        decision["used_answer_notes"] = []
+        decision["answer_source"] = "profile_llm_profile_only"
+        return decision
 
-    return decision_from_response(question, category, question_type, response, config, answer_mode)
+    return decision_from_response(question, category, question_type, response, config, answer_mode, answer_notes)
 
 
 def determine_answer_mode(question: dict[str, Any], category: str, profile: dict[str, Any]) -> str:
@@ -147,11 +155,13 @@ def build_prompt(
     session: dict[str, Any] | None,
     config: dict[str, Any],
     answer_mode: str,
+    answer_notes: list[dict[str, Any]] | None = None,
 ) -> str:
     _ = session
     payload = {
         "answer_mode": answer_mode,
         "user_profile": profile,
+        "external_reference_notes": answer_notes or [],
         "current_page_only": True,
         "answer_policy": {
             "answer_as_user": True,
@@ -161,6 +171,7 @@ def build_prompt(
             "option_ids_are_current_page_only": True,
             "representative_persona_may_answer_low_risk_questions": True,
             "professional_judgement_may_use_allowed_professional_range": True,
+            "used_answer_notes_must_be_from_external_reference_notes": True,
             "tone": config.get("answer_tone", "honest, concise, natural"),
             "language": config.get("language", "English"),
             "style": config.get("style", "simple British English"),
@@ -185,12 +196,14 @@ def build_prompt(
         "For professional_judgement, answer from the allowed professional range without claiming named employers, universities, or institutions. "
         "For strict_private, use only explicit user_profile evidence; otherwise require human review. "
         "Use only the current question and current answer_options. Do not use prior page memory, old option IDs, or session history. "
+        "Use external_reference_notes only when they are relevant, and list only their ids in used_answer_notes. "
         "Do not invent private facts, credentials, exact addresses, named institutions, or medical/financial details.\n\n"
         "Return this shape:\n"
         "{\"answer_mode\":\"representative_persona|professional_judgement|strict_private\","
         "\"recommended_option_ids\":[\"option_id\"],\"recommended_text_answer\":\"\","
         "\"confidence\":0.0,\"basis\":\"...\",\"reason\":\"...\",\"evidence\":[{\"source\":\"user_profile.notes\","
         "\"value\":\"...\",\"matched_text\":\"...\",\"match_type\":\"profile_llm\"}],"
+        "\"used_answer_notes\":[\"note_id\"],"
         "\"requires_human_review\":false,\"human_review_reason\":\"\"}\n\n"
         "Input JSON:\n"
         f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
@@ -204,6 +217,7 @@ def decision_from_response(
     response: dict[str, Any],
     config: dict[str, Any],
     default_answer_mode: str = "representative_persona",
+    answer_notes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     options_by_id = {
         str(option.get("option_id")): option
@@ -221,6 +235,8 @@ def decision_from_response(
 
     confidence = _confidence(response.get("confidence"))
     evidence = _evidence(response.get("evidence"))
+    used_answer_notes = _used_answer_notes(response.get("used_answer_notes"), answer_notes or [])
+    evidence.extend(_note_evidence(used_answer_notes, answer_notes or []))
     answer_mode = _answer_mode(response.get("answer_mode"), default_answer_mode)
     basis = str(response.get("basis") or "").strip()
     requires_review = bool(response.get("requires_human_review", True))
@@ -265,6 +281,8 @@ def decision_from_response(
     )
     decision["answer_mode"] = answer_mode
     decision["basis"] = basis
+    decision["used_answer_notes"] = used_answer_notes
+    decision["answer_source"] = "profile_llm_with_answer_notes" if used_answer_notes else "profile_llm_profile_only"
     if stale_references:
         decision.setdefault("warnings", []).append(
             "Profile LLM referenced non-current option IDs: " + ", ".join(stale_references)
@@ -304,6 +322,37 @@ def _evidence(value: Any) -> list[dict[str, Any]]:
                 }
             )
     return result
+
+
+def _used_answer_notes(value: Any, answer_notes: list[dict[str, Any]]) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    allowed = {str(note.get("id") or "") for note in answer_notes}
+    used = []
+    for item in value:
+        note_id = str(item)
+        if note_id in allowed and note_id not in used:
+            used.append(note_id)
+    return used
+
+
+def _note_evidence(used_answer_notes: list[str], answer_notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    notes_by_id = {str(note.get("id") or ""): note for note in answer_notes}
+    evidence = []
+    for note_id in used_answer_notes:
+        note = notes_by_id.get(note_id)
+        if not note:
+            continue
+        evidence.append(
+            {
+                "source": "answer_notes",
+                "id": note_id,
+                "value": str(note.get("text") or ""),
+                "matched_text": note_id,
+                "match_type": "answer_note",
+            }
+        )
+    return evidence
 
 
 def _stale_option_references(response: dict[str, Any], options_by_id: dict[str, dict[str, Any]]) -> list[str]:

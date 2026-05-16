@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from modules.answer_engine import answer_engine, input_loader, panel, user_profile_loader
+from modules.answer_engine import answer_context_loader, answer_engine, input_loader, panel, user_profile_loader
 from modules.answer_engine.answer_validator import validate_decision
 from modules.answer_engine.decision_store import save_decision
 from modules.answer_engine import decision_store
@@ -95,6 +95,69 @@ def test_answer_validator_flags_unsupported_personal_claim():
     assert report["issues"][0]["type"] == "unsupported_personal_claim"
 
 
+def test_answer_validator_rejects_option_id_not_on_current_page():
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Compared to what already exists?"},
+        "answer_options": [
+            {"option_id": "T24", "text": "This is essentially the same as what already exists"},
+            {"option_id": "T25", "text": "This would be slightly better than what already exists"},
+        ],
+    }
+    decision = {
+        "question_decisions": [
+            {
+                "question_id": "q1",
+                "question_category": "preference",
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T29"],
+                "recommended_text_answer": "",
+                "evidence": [],
+                "basis": "current page judgement",
+                "confidence": 0.9,
+                "click_targets": [{"option_id": "T29"}],
+            }
+        ],
+        "requires_human_review": False,
+    }
+    report = validate_decision(decision, {"questions": [question], "page": {"confidence": 1.0}}, config())
+    assert report["validation_passed"] is False
+    assert any(issue["type"] == "invalid_option_id" and issue["option_ids"] == ["T29"] for issue in report["issues"])
+    assert report["requires_human_review"] is True
+
+
+def test_answer_validator_accepts_current_page_option_id():
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Compared to what already exists?"},
+        "answer_options": [
+            {"option_id": "T24", "text": "This is essentially the same as what already exists"},
+            {"option_id": "T25", "text": "This would be slightly better than what already exists"},
+        ],
+    }
+    decision = {
+        "question_decisions": [
+            {
+                "question_id": "q1",
+                "question_category": "preference",
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T25"],
+                "recommended_text_answer": "",
+                "evidence": [],
+                "basis": "current page judgement",
+                "confidence": 0.9,
+                "click_targets": [{"option_id": "T25"}],
+            }
+        ],
+        "requires_human_review": False,
+    }
+    report = validate_decision(decision, {"questions": [question], "page": {"confidence": 1.0}}, config())
+    assert report["validation_passed"] is True
+    assert report["requires_human_review"] is False
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -118,6 +181,7 @@ def _patch_answer_engine_paths(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(decision_store, "RUNTIME_DIR", runtime)
     monkeypatch.setattr(decision_store, "DECISION_PATH", runtime / "latest_answer_decision.json")
     monkeypatch.setattr(decision_store, "REPORT_PATH", runtime / "latest_answer_engine_report.json")
+    monkeypatch.setattr(answer_context_loader, "ANSWER_NOTES_PATH", tmp_path / "knowledge_base" / "answer_notes.json")
 
 
 def test_answer_engine_loads_latest_local_parse_when_orchestrated_absent(tmp_path, monkeypatch):
@@ -203,6 +267,128 @@ def test_profile_llm_single_choice_selects_existing_option(tmp_path, monkeypatch
     assert qd["requires_human_review"] is False
     assert report["validation_passed"] is True
     assert report["requires_human_review"] is False
+
+
+def test_missing_answer_notes_file_does_not_break_profile_llm(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(tmp_path / "config" / "user_profile.json", {"notes": ["Use current page only."]})
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "Compared to what already exists?"},
+        "answer_options": [
+            {"option_id": "T24", "text": "This is essentially the same as what already exists"},
+            {"option_id": "T25", "text": "This would be slightly better than what already exists"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+
+    def fake_call(**kwargs):
+        assert '"external_reference_notes":[]' in kwargs["prompt"]
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T25"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "current page representative judgement",
+                "reason": "Selected from current options.",
+                "evidence": [],
+                "used_answer_notes": [],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["recommended_option_ids"] == ["T25"]
+    assert qd["used_answer_notes"] == []
+    assert qd["answer_source"] == "profile_llm_profile_only"
+    assert report["validation_passed"] is True
+
+
+def test_matching_answer_notes_are_included_in_decision_evidence(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "knowledge_base" / "answer_notes.json",
+        [
+            {
+                "id": "broadband_setup_balance",
+                "tags": ["broadband", "setup", "virgin media"],
+                "text": "Prefer a balanced answer about setup guidance and troubleshooting.",
+            }
+        ],
+    )
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(tmp_path / "config" / "user_profile.json", {"notes": ["Use concise answers."]})
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {"text": "How useful is this Virgin Media broadband setup app?"},
+        "answer_options": [
+            {"option_id": "T24", "text": "It is not useful"},
+            {"option_id": "T25", "text": "It is somewhat useful"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+
+    def fake_call(**kwargs):
+        assert "broadband_setup_balance" in kwargs["prompt"]
+        return json.dumps(
+            {
+                "answer_mode": "representative_persona",
+                "recommended_option_ids": ["T25"],
+                "recommended_text_answer": "",
+                "confidence": 0.9,
+                "basis": "answer note plus representative persona",
+                "reason": "The answer note supports a balanced usefulness answer.",
+                "evidence": [],
+                "used_answer_notes": ["broadband_setup_balance", "missing_note"],
+                "requires_human_review": False,
+                "human_review_reason": "",
+            }
+        )
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["used_answer_notes"] == ["broadband_setup_balance"]
+    assert qd["answer_source"] == "profile_llm_with_answer_notes"
+    assert {
+        "source": "answer_notes",
+        "id": "broadband_setup_balance",
+        "value": "Prefer a balanced answer about setup guidance and troubleshooting.",
+        "matched_text": "broadband_setup_balance",
+        "match_type": "answer_note",
+    } in qd["evidence"]
+    assert report["validation_passed"] is True
 
 
 def test_profile_llm_prompt_excludes_prior_session_memory(tmp_path, monkeypatch):
