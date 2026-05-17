@@ -6,8 +6,11 @@ from ctypes import wintypes
 
 
 INPUT_MOUSE = 0
+INPUT_KEYBOARD = 1
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -21,8 +24,18 @@ class MOUSEINPUT(ctypes.Structure):
     ]
 
 
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG)),
+    ]
+
+
 class INPUT_UNION(ctypes.Union):
-    _fields_ = [("mi", MOUSEINPUT)]
+    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
 
 
 class INPUT(ctypes.Structure):
@@ -98,3 +111,35 @@ def click_screen_point(x: int, y: int, pause_ms: int = 120) -> dict[str, int]:
         )
     left_click()
     return actual_position
+
+
+def _send_unicode_char(char: str) -> None:
+    user32 = _user32()
+    codepoint = ord(char)
+    if codepoint > 0xFFFF:
+        raise MouseKeyboardError("Only BMP Unicode characters are supported by SendInput.")
+    inputs = (INPUT * 2)(
+        INPUT(
+            type=INPUT_KEYBOARD,
+            union=INPUT_UNION(
+                ki=KEYBDINPUT(0, codepoint, KEYEVENTF_UNICODE, 0, None)
+            ),
+        ),
+        INPUT(
+            type=INPUT_KEYBOARD,
+            union=INPUT_UNION(
+                ki=KEYBDINPUT(0, codepoint, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, None)
+            ),
+        ),
+    )
+    sent = user32.SendInput(len(inputs), ctypes.byref(inputs), ctypes.sizeof(INPUT))
+    if sent != len(inputs):
+        error = ctypes.get_last_error()
+        raise MouseKeyboardError(f"SendInput text failed with Windows error {error}; sent {sent} events.")
+
+
+def type_text(text: str, pause_ms: int = 0) -> None:
+    for char in str(text):
+        _send_unicode_char(char)
+        if pause_ms > 0:
+            time.sleep(pause_ms / 1000.0)

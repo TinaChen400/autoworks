@@ -102,6 +102,45 @@ def test_session_loop_stops_when_terminal_flow_detected(tmp_path: Path, monkeypa
     assert (tmp_path / "latest_session_loop_report.json").exists()
 
 
+def test_session_loop_ignores_stale_artifacts_when_run_blocks(tmp_path: Path, monkeypatch) -> None:
+    old_time = 1_700_000_000
+    for name, payload in {
+        "latest_survey_session.json": {"flow_status": "finished"},
+        "latest_action_plan.json": {"status": "ready"},
+        "latest_action_executor_report.json": {"executed_action_count": 4},
+    }.items():
+        path = tmp_path / name
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        os.utime(path, (old_time, old_time))
+
+    def fake_run_once(**kwargs):
+        return {
+            "run_id": "run_1",
+            "started_at": "2026-05-17T12:00:00+00:00",
+            "overall_status": "waiting_review",
+        }
+
+    monkeypatch.setattr("modules.autoworks_runner.run_once.run_once", fake_run_once)
+
+    report = run_session_until_terminal(
+        runtime_state_dir=tmp_path,
+        max_pages=5,
+        wait_after_navigation_seconds=0,
+    )
+
+    assert report["stop_reason"] == "pipeline_waiting_review"
+    assert report["runs"] == [
+        {
+            "page_number": 1,
+            "run_id": "run_1",
+            "overall_status": "waiting_review",
+            "flow_status": "",
+            "action_plan_status": "",
+            "executed_action_count": 0,
+        }
+    ]
+
+
 def test_parse_quality_blocks_developer_window_content() -> None:
     issues = parse_quality_issues(
         {
@@ -167,6 +206,36 @@ def test_parse_quality_waits_when_parse_requires_review() -> None:
     )
 
     assert "needs_human_review: parse output requires human review" in issues
+
+
+def test_parse_quality_allows_actionable_page_with_top_level_review_flag() -> None:
+    issues = parse_quality_issues(
+        {
+            "requires_human_review": True,
+            "parsed_page": {
+                "page": {"page_type": "questionnaire", "confidence": 1.0},
+                "questions": [
+                    {
+                        "question_type": "text_input",
+                        "question_stem": {"text": "What do you like about this idea?"},
+                        "answer_options": [],
+                        "input_fields": [
+                            {
+                                "field_id": "f1",
+                                "field_type": "text",
+                                "click_point_norm": {"x": 0.5, "y": 0.5},
+                            }
+                        ],
+                        "confidence": 1.0,
+                        "requires_human_review": False,
+                    }
+                ],
+            },
+        },
+        allow_fake=False,
+    )
+
+    assert "needs_human_review: parse output requires human review" not in issues
 
 
 def test_required_skipped_step_causes_overall_status_blocked(monkeypatch, tmp_path: Path) -> None:
@@ -1014,6 +1083,78 @@ def test_click_once_does_not_execute_without_approval(monkeypatch, tmp_path: Pat
     assert statuses["human_review"] == "waiting_review"
     assert statuses["action_executor"] == "blocked"
     assert result["overall_status"] == "waiting_review"
+
+
+def test_click_once_executes_when_human_review_not_required(monkeypatch, tmp_path: Path) -> None:
+    executed = []
+
+    def fake_run_pipeline_step(step, **kwargs):
+        executed.append(step.name)
+        if step.name == "window_capture":
+            return fake_capture(tmp_path)
+        if step.name == "existing_capture_check":
+            return write_existing_capture_check_result(tmp_path)
+        if step.name == "context_mapper":
+            write_context(tmp_path)
+        if step.name == "perception_indexer":
+            write_perception(tmp_path)
+        if step.name == "parse_orchestrator":
+            write_parse(tmp_path, selected_mode="doubao", question_text="What now?", options=["Yes"])
+        if step.name == "execution_gate":
+            (tmp_path / "latest_execution_gate.json").write_text(
+                json.dumps({"execution_allowed": True, "status": "allowed"}),
+                encoding="utf-8",
+            )
+            (tmp_path / "latest_execution_gate_report.json").write_text(
+                json.dumps({"validation_passed": True, "issues": []}),
+                encoding="utf-8",
+            )
+        if step.name == "human_review":
+            (tmp_path / "latest_human_review_report.json").write_text(
+                json.dumps(
+                    {
+                        "validation_passed": True,
+                        "requires_human_review": False,
+                        "unresolved_question_ids": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (tmp_path / "latest_reviewed_answer_decision.json").write_text(
+                json.dumps({"requires_human_review": False}),
+                encoding="utf-8",
+            )
+        if step.name == "target_resolver":
+            (tmp_path / "latest_resolved_action_plan.json").write_text(
+                json.dumps({"status": "ready", "actions": [{"action_id": "a1"}]}),
+                encoding="utf-8",
+            )
+            (tmp_path / "latest_target_resolver_report.json").write_text(
+                json.dumps({"validation_passed": True, "issues": []}),
+                encoding="utf-8",
+            )
+        if step.name == "action_executor":
+            (tmp_path / "latest_action_executor_report.json").write_text(
+                json.dumps({"executed_action_count": 1}),
+                encoding="utf-8",
+            )
+        return {
+            "status": "success",
+            "summary": f"{step.name} ok",
+            "output_paths": {},
+            "warnings": [],
+            "errors": [],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr("modules.autoworks_runner.run_once.run_pipeline_step", fake_run_pipeline_step)
+
+    result = run_once(mode="click-once", runtime_state_dir=tmp_path)
+
+    statuses = {step["name"]: step["status"] for step in result["steps"]}
+    assert "action_executor" in executed
+    assert statuses["human_review"] == "success"
+    assert statuses["action_executor"] == "success"
 
 
 def write_parse(

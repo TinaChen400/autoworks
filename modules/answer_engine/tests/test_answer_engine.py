@@ -289,6 +289,83 @@ def test_profile_llm_single_choice_selects_existing_option(tmp_path, monkeypatch
     assert report["requires_human_review"] is False
 
 
+def test_profile_llm_existing_comparison_uses_prior_free_text_sentiment(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(
+        tmp_path / "config" / "answer_engine.json",
+        {
+            "minimum_confidence_without_review": 0.85,
+            "allow_profile_llm_answerer": True,
+        },
+    )
+    _write_json(tmp_path / "config" / "user_profile.json", {"notes": ["Use representative persona."]})
+    _write_json(
+        tmp_path / "runtime_state" / "latest_survey_session.json",
+        {
+            "session_id": "session_1",
+            "recent_answers": [
+                {
+                    "question_id": "q1",
+                    "question_text": "What do you like about this broadband setup app?",
+                    "answer_text": (
+                        "I like the idea of having a single app that guides me through broadband setup. "
+                        "It sounds practical, convenient, helpful, and could reduce stress."
+                    ),
+                    "confirmed": True,
+                    "decision_id": "decision_old",
+                },
+                {
+                    "question_id": "q2",
+                    "question_text": "What do you dislike about this broadband setup app?",
+                    "answer_text": (
+                        "There are some potential downsides, such as privacy concerns and the risk "
+                        "that it could feel overwhelming if there are too many steps."
+                    ),
+                    "confirmed": True,
+                    "decision_id": "decision_old",
+                },
+            ],
+        },
+    )
+    question = {
+        "question_id": "q1",
+        "question_type": "single_choice",
+        "question_stem": {
+            "text": (
+                "From the list below which best describes your thinking about this idea compared "
+                "to what already exists on the Virgin Media website?"
+            )
+        },
+        "answer_options": [
+            {"option_id": "T26", "text": "I do not see any reason to use this"},
+            {"option_id": "T27", "text": "What exists already is better than this"},
+            {"option_id": "T28", "text": "This is essentially the same as what already exists"},
+            {"option_id": "T29", "text": "This would be slightly better than what already exists"},
+            {"option_id": "T30", "text": "This would be much more useful than what currently exists"},
+        ],
+        "confidence": 1.0,
+    }
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [question]}},
+    )
+
+    def fake_call(**_kwargs):
+        raise AssertionError("session consistency should answer without calling the LLM")
+
+    monkeypatch.setattr(profile_llm_strategy, "call_ollama_answerer", fake_call)
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    qd = decision["question_decisions"][0]
+    assert qd["recommended_option_ids"] == ["T29"]
+    assert qd["answer_source"] == "session_consistency"
+    assert qd["requires_human_review"] is False
+    assert qd["evidence"][0]["source"] == "session.recent_answers"
+    assert report["validation_passed"] is True
+    assert report["requires_human_review"] is False
+
+
 def test_missing_answer_notes_file_does_not_break_profile_llm(tmp_path, monkeypatch):
     _patch_answer_engine_paths(monkeypatch, tmp_path)
     _write_json(

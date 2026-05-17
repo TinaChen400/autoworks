@@ -135,6 +135,17 @@ def _find_navigation_button(
     return None
 
 
+def _find_input_field(orchestrated_parse: dict[str, Any], question_id: Any) -> dict[str, Any] | None:
+    page = parsed_page(orchestrated_parse)
+    for question in page.get("questions", []) or []:
+        if not isinstance(question, dict) or question.get("question_id") != question_id:
+            continue
+        for field in question.get("input_fields", []) or []:
+            if isinstance(field, dict):
+                return field
+    return None
+
+
 def _selection_control(option: dict[str, Any]) -> str:
     return str(
         option.get("selection_control")
@@ -524,6 +535,54 @@ def resolve_action_plan(
 
         if skill == "request_human_review":
             actions.append(_strip_coordinates(resolved))
+            continue
+
+        if skill == "type_text":
+            target = resolved.get("target") if isinstance(resolved.get("target"), dict) else {}
+            question_id_value = target.get("question_id", "")
+            field = _find_input_field(orchestrated_parse, question_id_value)
+            if field is None:
+                issues.append(
+                    unresolved_issue(
+                        resolved,
+                        "input_field_not_found",
+                        "type_text input field was not found in latest_orchestrated_parse.json",
+                    )
+                )
+                actions.append(resolved)
+                continue
+            click_point_norm = _numeric_point(field.get("click_point_norm"))
+            if click_point_norm is None:
+                click_point_norm = _numeric_bbox_center(field.get("bbox_norm"))
+            text_geometry = _candidate_from_norm(
+                "parsed_input_field",
+                click_point_norm,
+                runtime_context,
+                float(field.get("confidence", 1.0) or 1.0),
+                str(field.get("field_id", "")),
+                str(field.get("field_type") or field.get("raw_field_type") or "text_input"),
+                is_primary=True,
+            )
+            if text_geometry is None:
+                issues.append(
+                    unresolved_issue(
+                        resolved,
+                        "input_field_geometry_not_found",
+                        "type_text input field has no usable click geometry.",
+                    )
+                )
+                actions.append(resolved)
+                continue
+            resolved["target"] = {
+                "question_id": str(question_id_value),
+                "field_id": str(field.get("field_id", "")),
+                "field_type": str(field.get("field_type") or field.get("raw_field_type") or ""),
+                "resolver_source": "parsed_input_field",
+                "resolver_confidence": text_geometry.pop("confidence", 1.0),
+                "click_candidates": [text_geometry],
+                **text_geometry,
+            }
+            actions.append(resolved)
             continue
 
         if skill == "click_navigation":

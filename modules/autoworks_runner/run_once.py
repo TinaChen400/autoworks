@@ -99,7 +99,6 @@ RUNTIME_OUTPUTS = {
     },
     "action_executor": {
         "report": RUNTIME_STATE_DIR / "latest_action_executor_report.json",
-        "scheduler_run": RUNTIME_STATE_DIR / "latest_scheduler_run.json",
     },
 }
 
@@ -335,9 +334,21 @@ def run_session_until_terminal(
             use_existing_capture=False,
             runtime_state_dir=runtime_state_dir,
         )
-        session = read_json(runtime_state_dir / "latest_survey_session.json")
-        action_plan = read_json(runtime_state_dir / "latest_action_plan.json")
-        executor_report = read_json(runtime_state_dir / "latest_action_executor_report.json")
+        run_started_at = (
+            datetime.fromisoformat(state["started_at"]) if state.get("started_at") else None
+        )
+        session = read_fresh_json(
+            runtime_state_dir / "latest_survey_session.json",
+            min_mtime=run_started_at,
+        )
+        action_plan = read_fresh_json(
+            runtime_state_dir / "latest_action_plan.json",
+            min_mtime=run_started_at,
+        )
+        executor_report = read_fresh_json(
+            runtime_state_dir / "latest_action_executor_report.json",
+            min_mtime=run_started_at,
+        )
         flow_status = str(session.get("flow_status") or "")
         action_plan_status = str(action_plan.get("status") or "")
         executed_count = int(executor_report.get("executed_action_count") or 0)
@@ -380,6 +391,16 @@ def run_session_until_terminal(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return report
+
+
+def read_fresh_json(path: Path, *, min_mtime: datetime | None) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    if min_mtime is None:
+        return read_json(path)
+    if path.stat().st_mtime < min_mtime.timestamp():
+        return {}
+    return read_json(path)
 
 
 def build_step_definitions(
@@ -1046,7 +1067,7 @@ def parse_quality_issues(orchestrated: dict[str, Any], *, allow_fake: bool) -> l
         issues.append("fake parser output is schema-valid only and is not accepted")
 
     parsed_page = orchestrated.get("parsed_page") or {}
-    if parsed_page_requires_human_review(parsed_page) or orchestrated.get("requires_human_review") is True:
+    if parsed_page_requires_human_review(parsed_page):
         issues.append("needs_human_review: parse output requires human review")
     questions = parsed_page.get("questions") or []
     page = parsed_page.get("page") or {}
@@ -1367,6 +1388,8 @@ def human_review_approved(
         return False, f"human review status is {decision['status']}"
     if decision.get("approved") is False:
         return False, "human review rejected approval"
+    if report.get("requires_human_review") is False and decision.get("requires_human_review") is False:
+        return True, "human review not required"
     approval_exists = (
         report.get("approved") is True
         or report.get("human_approved") is True

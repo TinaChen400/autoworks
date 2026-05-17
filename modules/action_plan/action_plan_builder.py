@@ -55,7 +55,6 @@ def _load_source_parse_page(decision: dict) -> dict:
         candidates = [
             action_plan_store.RUNTIME_DIR.parent / source_path,
             action_plan_store.RUNTIME_DIR / source_path.name,
-            source_path,
         ]
 
     for candidate in candidates:
@@ -97,11 +96,25 @@ def _target(question_id: str, option_id: str = "", option_text: str = "") -> dic
 
 def _navigation_target(button: dict) -> dict:
     text = button.get("text") or button.get("label") or ""
+    action_name = _normalized_navigation_action(button)
     return {
         "button_id": button.get("button_id", ""),
-        "action": button.get("action", ""),
+        "action": action_name,
         "text": text,
     }
+
+
+def _normalized_navigation_action(button: dict) -> str:
+    action_name = str(button.get("action") or "")
+    if action_name in NAVIGATION_ACTIONS:
+        return action_name
+    raw_action = str(button.get("raw_action") or "")
+    if raw_action in {"navigate_forward", "next", "continue"}:
+        return "continue"
+    label = str(button.get("text") or button.get("label") or "").strip().casefold()
+    if label in {"next", "continue", "submit"}:
+        return "submit" if label == "submit" else "continue"
+    return action_name
 
 
 def _navigation_button(source_page: dict) -> dict:
@@ -110,11 +123,7 @@ def _navigation_button(source_page: dict) -> dict:
         return {}
     for preferred in ("next_page", "continue", "submit"):
         for button in buttons:
-            if (
-                isinstance(button, dict)
-                and button.get("action") == preferred
-                and button.get("action") in NAVIGATION_ACTIONS
-            ):
+            if isinstance(button, dict) and _normalized_navigation_action(button) == preferred:
                 return button
     return {}
 

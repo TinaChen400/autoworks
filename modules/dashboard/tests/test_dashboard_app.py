@@ -568,6 +568,82 @@ def test_preview_block_preserves_existing_target_lock_diagnostics(tmp_path: Path
     assert payload["anchor_frame"]["width"] == 1920
 
 
+def test_run_session_loop_falls_back_to_doubao_when_ollama_parse_blocks(tmp_path: Path) -> None:
+    write_json(tmp_path / "latest_locked_target.json", {"target_locked": True})
+    write_json(
+        tmp_path / "latest_parse_orchestrator_report.json",
+        {"validation_passed": False, "requires_human_review": True},
+    )
+    handler = object.__new__(DashboardHandler)
+    handler.path = "/run-session-loop"
+    handler.runtime_state_dir = tmp_path
+    handler.redirect_home = Mock()
+    commands = []
+
+    def fake_run(command):
+        commands.append(command)
+        parser_mode = command[command.index("--parser-mode") + 1]
+        return {
+            "status": "success",
+            "command": command,
+            "command_text": " ".join(command),
+            "returncode": 0,
+            "stdout": (
+                "session loop: stopped\nstop_reason: pipeline_blocked\nrun_count: 1\n"
+                if parser_mode == "ollama"
+                else "session loop: stopped\nstop_reason: pipeline_waiting_review\nrun_count: 1\n"
+            ),
+            "stderr": "",
+            "created_at": "now",
+        }
+
+    handler.run_dashboard_subprocess = fake_run
+
+    DashboardHandler.do_POST(handler)
+
+    parser_modes = [command[command.index("--parser-mode") + 1] for command in commands]
+    assert parser_modes == ["ollama", "doubao"]
+    action = json.loads((tmp_path / "latest_dashboard_action.json").read_text(encoding="utf-8"))
+    assert action["fallback_used"] is True
+    assert len(action["attempts"]) == 2
+    handler.redirect_home.assert_called_once()
+
+
+def test_run_session_loop_does_not_fallback_when_ollama_reaches_terminal(tmp_path: Path) -> None:
+    write_json(tmp_path / "latest_locked_target.json", {"target_locked": True})
+    write_json(
+        tmp_path / "latest_parse_orchestrator_report.json",
+        {"validation_passed": True, "requires_human_review": False},
+    )
+    handler = object.__new__(DashboardHandler)
+    handler.path = "/run-session-loop"
+    handler.runtime_state_dir = tmp_path
+    handler.redirect_home = Mock()
+    commands = []
+
+    def fake_run(command):
+        commands.append(command)
+        return {
+            "status": "success",
+            "command": command,
+            "command_text": " ".join(command),
+            "returncode": 0,
+            "stdout": "session loop: completed\nstop_reason: terminal_flow_status:finished\nrun_count: 2\n",
+            "stderr": "",
+            "created_at": "now",
+        }
+
+    handler.run_dashboard_subprocess = fake_run
+
+    DashboardHandler.do_POST(handler)
+
+    parser_modes = [command[command.index("--parser-mode") + 1] for command in commands]
+    assert parser_modes == ["ollama"]
+    action = json.loads((tmp_path / "latest_dashboard_action.json").read_text(encoding="utf-8"))
+    assert action["fallback_used"] is False
+    assert len(action["attempts"]) == 1
+
+
 def test_render_dashboard_shows_multi_action_real_click_results(tmp_path: Path) -> None:
     write_ready_chain(tmp_path)
     write_json(

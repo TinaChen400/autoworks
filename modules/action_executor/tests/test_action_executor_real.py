@@ -14,10 +14,14 @@ def _write_json(path: Path, payload: dict) -> None:
 class FakeMouse:
     def __init__(self) -> None:
         self.calls: list[tuple[int, int, int]] = []
+        self.typed: list[str] = []
 
     def click_screen_point(self, x: int, y: int, pause_ms: int = 120) -> dict[str, int]:
         self.calls.append((x, y, pause_ms))
         return {"x": x, "y": y}
+
+    def type_text(self, text: str) -> None:
+        self.typed.append(text)
 
 
 class FakeCapture:
@@ -92,6 +96,12 @@ def _navigation_action() -> dict:
         "params": {},
         "requires_review": False,
     }
+
+
+def _text_action() -> dict:
+    action = _action(skill="type_text")
+    action["params"] = {"text": "Helpful setup guidance."}
+    return action
 
 
 def _gate(allowed: bool = True, actions: list[dict] | None = None) -> dict:
@@ -211,6 +221,26 @@ def test_allowed_click_option_creates_executable_records(tmp_path: Path) -> None
     assert (runtime / "latest_action_executor_report.json").exists()
 
 
+def test_type_text_clicks_field_and_types_text(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True, [_text_action()]))
+    fake_mouse = FakeMouse()
+
+    _run_payload, report = run(
+        "auto",
+        runtime_dir=runtime,
+        mouse_api=fake_mouse,
+        pause_ms=5,
+        verify_click=False,
+    )
+
+    assert fake_mouse.calls == [(160, 270, 5)]
+    assert fake_mouse.typed == ["Helpful setup guidance."]
+    assert report["validation_passed"] is True
+    assert report["executed_action_count"] == 1
+    assert report["action_records"][0]["status"] == "typed"
+
+
 def test_verified_click_stops_after_selected_candidate(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime_state"
     _write_json(runtime / "latest_execution_gate.json", _gate(True))
@@ -321,7 +351,7 @@ def test_inconclusive_click_verification_stops_safely(tmp_path: Path) -> None:
 
 def test_unsupported_skill_blocks_execution(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime_state"
-    _write_json(runtime / "latest_execution_gate.json", _gate(True, [_action(skill="type_text")]))
+    _write_json(runtime / "latest_execution_gate.json", _gate(True, [_action(skill="select_dropdown")]))
     fake_mouse = FakeMouse()
 
     _run_payload, report = run("auto", runtime_dir=runtime, mouse_api=fake_mouse)

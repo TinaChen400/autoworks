@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, urlsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_STATE_DIR = PROJECT_ROOT / "runtime_state"
+SESSION_LOOP_PRIMARY_PARSER_MODE = "ollama"
+SESSION_LOOP_FALLBACK_PARSER_MODE = "doubao"
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -1239,18 +1241,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.write_blocked_lock()
                     self.redirect_home()
                     return
-                command = [
-                    sys.executable,
-                    "-m",
-                    "modules.autoworks_runner.run_once",
-                    "--mode",
-                    "session",
-                    "--parser-mode",
-                    "ollama",
-                    "--ocr",
-                    "rapidocr",
-                ]
-                self.run_dashboard_command(command)
+                self.run_session_loop_with_fallback()
                 self.redirect_home()
                 return
             step_commands = {
@@ -1373,6 +1364,73 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "created_at": utc_now(),
             },
         )
+
+    def run_session_loop_with_fallback(self) -> None:
+        primary = self.session_loop_command(SESSION_LOOP_PRIMARY_PARSER_MODE)
+        primary_result = self.run_dashboard_subprocess(primary)
+        attempts = [primary_result]
+        if self.session_loop_needs_parser_fallback(primary_result):
+            fallback = self.session_loop_command(SESSION_LOOP_FALLBACK_PARSER_MODE)
+            attempts.append(self.run_dashboard_subprocess(fallback))
+
+        final = attempts[-1]
+        payload = {
+            "status": final["status"],
+            "command": final["command"],
+            "command_text": final["command_text"],
+            "returncode": final["returncode"],
+            "stdout": final["stdout"],
+            "stderr": final["stderr"],
+            "attempts": attempts,
+            "fallback_used": len(attempts) > 1,
+            "created_at": utc_now(),
+        }
+        write_json(self.runtime_state_dir / "latest_dashboard_action.json", payload)
+
+    def session_loop_command(self, parser_mode: str) -> list[str]:
+        return [
+            sys.executable,
+            "-m",
+            "modules.autoworks_runner.run_once",
+            "--mode",
+            "session",
+            "--parser-mode",
+            parser_mode,
+            "--ocr",
+            "rapidocr",
+        ]
+
+    def run_dashboard_subprocess(self, command: list[str]) -> dict[str, Any]:
+        completed = subprocess.run(
+            command,
+            cwd=str(PROJECT_ROOT),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        status = "success" if completed.returncode == 0 else "failed"
+        return {
+            "status": status,
+            "command": command,
+            "command_text": " ".join(command),
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+            "created_at": utc_now(),
+        }
+
+    def session_loop_needs_parser_fallback(self, result: dict[str, Any]) -> bool:
+        command = result.get("command") or []
+        if SESSION_LOOP_PRIMARY_PARSER_MODE not in command:
+            return False
+        if result.get("returncode") != 0:
+            return True
+        stdout = str(result.get("stdout") or "")
+        if "stop_reason: pipeline_blocked" in stdout or "stop_reason: pipeline_waiting_review" in stdout:
+            parse_report = read_json(self.runtime_state_dir / "latest_parse_orchestrator_report.json")
+            if parse_report.get("requires_human_review") is True or parse_report.get("validation_passed") is False:
+                return True
+        return False
 
     def log_message(self, format: str, *args: Any) -> None:
         return

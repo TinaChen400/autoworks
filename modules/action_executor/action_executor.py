@@ -114,6 +114,41 @@ def _execute_record(
     verify_click: bool,
     post_click_pause_ms: int,
 ) -> tuple[bool, dict[str, Any] | None]:
+    if record.get("skill") == "type_text":
+        point = _candidate_point(
+            {
+                "click_point_screen": record.get("click_point_screen"),
+            }
+        )
+        if point is None:
+            record["status"] = "missing_text_target"
+            return False, {
+                "code": "missing_text_target",
+                "message": "type_text action requires click_point_screen.",
+                "action_id": record.get("action_id", ""),
+            }
+        try:
+            actual_position = mouse_api.click_screen_point(
+                point["x"],
+                point["y"],
+                pause_ms=pause_ms,
+            )
+            if post_click_pause_ms > 0:
+                time.sleep(post_click_pause_ms / 1000.0)
+            mouse_api.type_text(str(record.get("text") or ""))
+        except Exception as exc:  # noqa: BLE001
+            record["status"] = "type_failed"
+            return False, {
+                "code": "type_text_failed",
+                "message": str(exc),
+                "action_id": record.get("action_id", ""),
+            }
+        record["click_point_screen"] = point
+        if isinstance(actual_position, dict):
+            record["actual_cursor_position"] = actual_position
+        record["status"] = "typed"
+        return True, None
+
     attempts: list[dict[str, Any]] = []
     candidates = record.get("click_candidates")
     if not isinstance(candidates, list) or not candidates:

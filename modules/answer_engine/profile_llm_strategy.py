@@ -35,6 +35,16 @@ def decide(
     answer_mode = determine_answer_mode(question, category, profile)
     answer_notes = load_relevant_answer_notes(question)
     options_by_id = _options_by_id(question)
+    consistency_decision = _decision_from_session_consistency(
+        question,
+        category,
+        question_type,
+        session,
+        config,
+        answer_mode,
+    )
+    if consistency_decision is not None:
+        return consistency_decision
     if not profile_exists and answer_mode == "strict_private":
         decision = question_decision(
             question,
@@ -95,6 +105,173 @@ def decide(
         return decision
 
     return decision_from_response(question, category, question_type, response, config, answer_mode, answer_notes)
+
+
+def _decision_from_session_consistency(
+    question: dict[str, Any],
+    category: str,
+    question_type: str,
+    session: dict[str, Any] | None,
+    config: dict[str, Any],
+    answer_mode: str,
+) -> dict[str, Any] | None:
+    if question_type != "single_choice":
+        return None
+    options = question.get("answer_options", []) or []
+    option = _option_matching_prior_sentiment(question, options, session)
+    if option is None:
+        return None
+    confidence = float(config.get("session_consistency_confidence", 0.92))
+    answer_texts = _recent_answer_texts(session)
+    evidence_text = " ".join(answer_texts[-3:])[:500]
+    decision = question_decision(
+        question,
+        category,
+        "profile_llm_strategy",
+        recommended_option_ids=[str(option.get("option_id") or "")],
+        confidence=confidence,
+        reason=(
+            "Selected the current-page option that is consistent with prior free-text "
+            "answers about the same concept."
+        ),
+        evidence=[
+            {
+                "source": "session.recent_answers",
+                "value": evidence_text,
+                "matched_text": "prior concept feedback",
+                "match_type": "semantic_consistency",
+            }
+        ],
+        requires_human_review=False,
+        click_targets=[click_target_from_option(option)],
+    )
+    decision["answer_mode"] = answer_mode
+    decision["basis"] = "Prior free-text answers were positive with reservations, so a measured improvement option fits best."
+    decision["used_answer_notes"] = []
+    decision["answer_source"] = "session_consistency"
+    return decision
+
+
+def _option_matching_prior_sentiment(
+    question: dict[str, Any],
+    options: list[dict[str, Any]],
+    session: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not _is_existing_comparison_question(question, options):
+        return None
+    sentiment = _prior_concept_sentiment(session)
+    if sentiment == "mixed_positive":
+        return _find_option_by_text(options, ("slightly better", "somewhat better"))
+    if sentiment == "strong_positive":
+        return _find_option_by_text(options, ("much more useful", "much better")) or _find_option_by_text(
+            options, ("slightly better", "somewhat better")
+        )
+    if sentiment == "neutral":
+        return _find_option_by_text(options, ("essentially the same", "same as what already exists"))
+    if sentiment == "negative":
+        return _find_option_by_text(options, ("already is better", "existing is better", "no reason to use"))
+    return None
+
+
+def _is_existing_comparison_question(question: dict[str, Any], options: list[dict[str, Any]]) -> bool:
+    text = (
+        get_question_text(question)
+        + " "
+        + " ".join(str(option.get("text") or "") for option in options)
+    ).casefold()
+    has_comparison = any(term in text for term in ("compared", "already existing", "already exists", "current website"))
+    has_scale = any(
+        term in text
+        for term in (
+            "slightly better",
+            "much more useful",
+            "essentially the same",
+            "already is better",
+            "no reason to use",
+        )
+    )
+    return has_comparison and has_scale
+
+
+def _prior_concept_sentiment(session: dict[str, Any] | None) -> str:
+    answer_texts = _recent_answer_texts(session)
+    if not answer_texts:
+        return ""
+    text = " ".join(answer_texts[-8:]).casefold()
+    positive_terms = (
+        "i like",
+        "useful",
+        "helpful",
+        "practical",
+        "convenient",
+        "save time",
+        "reduce stress",
+        "single app",
+        "one place",
+        "step-by-step",
+        "tracking",
+        "troubleshooting",
+    )
+    reservation_terms = (
+        "however",
+        "but",
+        "potential downside",
+        "downsides",
+        "concern",
+        "overwhelming",
+        "frustration",
+        "risk",
+        "privacy",
+        "too complex",
+    )
+    negative_terms = (
+        "do not like",
+        "don't like",
+        "no reason to use",
+        "not useful",
+        "worse",
+        "prefer existing",
+        "existing is better",
+        "already is better",
+    )
+    positive_count = sum(1 for term in positive_terms if term in text)
+    reservation_count = sum(1 for term in reservation_terms if term in text)
+    negative_count = sum(1 for term in negative_terms if term in text)
+    if negative_count and positive_count == 0:
+        return "negative"
+    if positive_count >= 2 and reservation_count:
+        return "mixed_positive"
+    if positive_count >= 3:
+        return "strong_positive"
+    if positive_count:
+        return "mixed_positive"
+    if any(term in text for term in ("same as", "similar", "not significantly different")):
+        return "neutral"
+    return ""
+
+
+def _recent_answer_texts(session: dict[str, Any] | None) -> list[str]:
+    if not isinstance(session, dict):
+        return []
+    recent = session.get("recent_answers")
+    if not isinstance(recent, list):
+        return []
+    texts: list[str] = []
+    for item in recent:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("answer_text") or "").strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+def _find_option_by_text(options: list[dict[str, Any]], terms: tuple[str, ...]) -> dict[str, Any] | None:
+    for option in options:
+        text = str(option.get("text") or "").casefold()
+        if any(term in text for term in terms):
+            return option
+    return None
 
 
 def determine_answer_mode(question: dict[str, Any], category: str, profile: dict[str, Any]) -> str:

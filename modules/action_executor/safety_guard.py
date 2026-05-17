@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 
-SUPPORTED_REAL_EXECUTION_SKILLS = {"click_option", "click_navigation"}
+SUPPORTED_REAL_EXECUTION_SKILLS = {"click_option", "click_navigation", "type_text"}
 
 
 def _error(code: str, message: str, action_id: str = "", skill: str = "") -> dict[str, Any]:
@@ -114,6 +114,7 @@ def action_record(action: dict[str, Any], x: int, y: int, dry_run: bool) -> dict
         "button_id": target.get("button_id", ""),
         "navigation_action": target.get("action", ""),
         "navigation_text": target.get("text", ""),
+        "text": str((action.get("params") or {}).get("text") or ""),
         "click_point_screen": {"x": x, "y": y},
         "click_candidates": click_candidates(action, x, y),
         "real_execution": not dry_run,
@@ -161,10 +162,15 @@ def validate_gate_for_real_execution(gate: dict[str, Any] | None, dry_run: bool)
             errors.append(
                 _error(
                     "unsupported_skill",
-                    "Only click_option and click_navigation can be executed.",
+                    "Only click_option, click_navigation, and type_text can be executed.",
                     action_id,
                     skill,
                 )
+            )
+            continue
+        if skill == "type_text" and not str((action.get("params") or {}).get("text") or ""):
+            errors.append(
+                _error("missing_text", "type_text action requires params.text.", action_id, skill)
             )
             continue
         if action.get("requires_review") is not False:
