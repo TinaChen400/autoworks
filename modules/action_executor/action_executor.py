@@ -162,7 +162,8 @@ def _execute_record(
         if post_click_pause_ms > 0:
             time.sleep(post_click_pause_ms / 1000.0)
 
-        if not verify_click:
+        should_verify = verify_click and record.get("skill") != "click_navigation"
+        if not should_verify:
             attempt["status"] = "clicked"
             attempts.append(attempt)
             record["click_point_screen"] = point

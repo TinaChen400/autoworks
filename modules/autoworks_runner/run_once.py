@@ -4,7 +4,7 @@ import argparse
 import hashlib
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +16,12 @@ from modules.autoworks_runner.pipeline_steps import (
     module_is_available,
     run_python_module,
 )
+from modules.page_state_manager.session_lite import classify_flow_status
 
 
 RUNTIME_STATE_DIR = PROJECT_ROOT / "runtime_state"
 RUNTIME_CAPTURE_PATH = RUNTIME_STATE_DIR / "latest_capture.png"
+SESSION_LOOP_REPORT_PATH = RUNTIME_STATE_DIR / "latest_session_loop_report.json"
 NO_LOCKED_TARGET_MESSAGE = (
     "No locked target window. Please snap and lock the KVM/remote window before running preview."
 )
@@ -38,7 +40,7 @@ MODULES = {
     "execution_gate": "modules.execution_gate.execution_gate",
     "human_review": "modules.human_review.human_review_processor",
     "click_preview": "modules.action_executor.preview_adapter",
-    "action_executor": "modules.action_executor.local_real_click_runner",
+    "action_executor": "modules.action_executor.action_executor",
 }
 
 RUNTIME_OUTPUTS = {
@@ -304,6 +306,82 @@ def run_once(
     return state.to_dict()
 
 
+def run_session_until_terminal(
+    *,
+    task_id: str = "tts01",
+    parser_mode: str = "doubao",
+    output_level: str = "standard",
+    max_model_calls: int = 3,
+    ocr_backend: str = "disabled",
+    allow_fake: bool = False,
+    allow_fixture: bool = False,
+    max_pages: int = 50,
+    wait_after_navigation_seconds: float = 1.0,
+    runtime_state_dir: Path = RUNTIME_STATE_DIR,
+) -> dict[str, Any]:
+    runtime_state_dir = Path(runtime_state_dir)
+    runs: list[dict[str, Any]] = []
+    stop_reason = "max_pages_reached"
+    for page_number in range(1, max_pages + 1):
+        state = run_once(
+            task_id=task_id,
+            mode="click-once",
+            parser_mode=parser_mode,
+            output_level=output_level,
+            max_model_calls=max_model_calls,
+            ocr_backend=ocr_backend,
+            allow_fake=allow_fake,
+            allow_fixture=allow_fixture,
+            use_existing_capture=False,
+            runtime_state_dir=runtime_state_dir,
+        )
+        session = read_json(runtime_state_dir / "latest_survey_session.json")
+        action_plan = read_json(runtime_state_dir / "latest_action_plan.json")
+        executor_report = read_json(runtime_state_dir / "latest_action_executor_report.json")
+        flow_status = str(session.get("flow_status") or "")
+        action_plan_status = str(action_plan.get("status") or "")
+        executed_count = int(executor_report.get("executed_action_count") or 0)
+        run_summary = {
+            "page_number": page_number,
+            "run_id": state.get("run_id", ""),
+            "overall_status": state.get("overall_status", ""),
+            "flow_status": flow_status,
+            "action_plan_status": action_plan_status,
+            "executed_action_count": executed_count,
+        }
+        runs.append(run_summary)
+
+        if flow_status in {"finished", "kicked_out"}:
+            stop_reason = f"terminal_flow_status:{flow_status}"
+            break
+        if action_plan_status == "no_action":
+            stop_reason = "no_action"
+            break
+        if state.get("overall_status") in {"blocked", "waiting_review", "failed"}:
+            stop_reason = f"pipeline_{state.get('overall_status')}"
+            break
+        if executed_count <= 0:
+            stop_reason = "no_actions_executed"
+            break
+        if wait_after_navigation_seconds > 0:
+            import time
+
+            time.sleep(wait_after_navigation_seconds)
+
+    report = {
+        "status": "completed" if stop_reason.startswith("terminal_flow_status") else "stopped",
+        "stop_reason": stop_reason,
+        "run_count": len(runs),
+        "max_pages": max_pages,
+        "runs": runs,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    output_path = runtime_state_dir / "latest_session_loop_report.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return report
+
+
 def build_step_definitions(
     *,
     mode: str,
@@ -455,7 +533,6 @@ def build_step_definitions(
             name="action_executor",
             required="action_executor" in common_required,
             module_name=MODULES["action_executor"],
-            args=["--mode", "click-once"],
             expected_outputs=outputs["action_executor"],
         ),
     ]
@@ -977,6 +1054,8 @@ def parse_quality_issues(orchestrated: dict[str, Any], *, allow_fake: bool) -> l
     visual_elements = parsed_page.get("visual_elements") or []
     navigation_buttons = parsed_page.get("navigation_buttons") or []
     if not questions:
+        if classify_flow_status(parsed_page) in {"finished", "kicked_out"}:
+            return issues
         if page_type == "image_task" and visual_elements:
             issues.append(
                 "needs_human_review: image_task has visual elements but no answerable question"
@@ -1384,9 +1463,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--task", default="tts01", help="Task id to use for context-aware steps.")
     parser.add_argument(
         "--mode",
-        choices=["dry-run", "preview", "click-once"],
+        choices=["dry-run", "preview", "click-once", "session"],
         default="preview",
-        help="Only click-once can reach real action execution.",
+        help="click-once executes one page; session loops pages until terminal state.",
     )
     parser.add_argument("--parser-mode", choices=["fake", "doubao", "ollama"], default="doubao")
     parser.add_argument("--output-level", choices=["light", "standard"], default="standard")
@@ -1407,11 +1486,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Use and validate runtime_state/latest_capture.png without overwriting it.",
     )
     parser.add_argument("--ocr", choices=["disabled", "tesseract", "rapidocr"], default="disabled")
+    parser.add_argument("--max-pages", type=int, default=50)
+    parser.add_argument("--wait-after-navigation-seconds", type=float, default=1.0)
     return parser
 
 
 def main() -> None:
     args = build_arg_parser().parse_args()
+    if args.mode == "session":
+        report = run_session_until_terminal(
+            task_id=args.task,
+            parser_mode=args.parser_mode,
+            output_level=args.output_level,
+            max_model_calls=args.max_model_calls,
+            ocr_backend=args.ocr,
+            allow_fake=args.allow_fake,
+            allow_fixture=args.allow_fixture,
+            max_pages=args.max_pages,
+            wait_after_navigation_seconds=args.wait_after_navigation_seconds,
+        )
+        print(f"session loop: {report['status']}")
+        print(f"stop_reason: {report['stop_reason']}")
+        print(f"run_count: {report['run_count']}")
+        return
     state = run_once(
         task_id=args.task,
         mode=args.mode,

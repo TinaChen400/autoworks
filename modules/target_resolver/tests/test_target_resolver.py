@@ -45,6 +45,8 @@ def _action_plan(skill: str = "click_option", option_id: str = "o1") -> dict:
     target = {"question_id": "q1"}
     if option_id:
         target["option_id"] = option_id
+    if skill == "click_navigation":
+        target = {"button_id": "nav_next", "action": "next_page", "text": "Next"}
     return {
         "action_plan_id": "action_plan_1",
         "task_id": "task1",
@@ -107,6 +109,20 @@ def _orchestrated_parse_with_option_geometry(
     if control_element_id:
         option["control_element_id"] = control_element_id
     return {"parsed_page": {"questions": [{"question_id": "q1", "answer_options": [option]}]}}
+
+
+def _orchestrated_parse_with_navigation() -> dict:
+    payload = _orchestrated_parse()
+    payload["parsed_page"]["navigation_buttons"] = [
+        {
+            "button_id": "nav_next",
+            "action": "next_page",
+            "text": "Next",
+            "click_point_norm": {"x": 0.5, "y": 0.6},
+            "confidence": 0.95,
+        }
+    ]
+    return payload
 
 
 def _layout_index() -> dict:
@@ -219,6 +235,24 @@ def test_click_option_resolves_from_parsed_click_point_norm() -> None:
     assert target["resolver_confidence"] == 0.85
     assert target["resolver_confidence"] >= 0.5
     assert target["resolver_source"] == "parsed_option_geometry"
+
+
+def test_click_navigation_resolves_from_navigation_button_geometry() -> None:
+    resolved, report = resolve_action_plan(
+        _action_plan("click_navigation", ""),
+        _orchestrated_parse_with_navigation(),
+        _empty_layout_index(),
+        _runtime_context(),
+    )
+
+    assert report["validation_passed"] is True
+    action = resolved["actions"][0]
+    assert action["skill"] == "click_navigation"
+    target = action["target"]
+    assert target["button_id"] == "nav_next"
+    assert target["action"] == "next_page"
+    assert target["click_point_screen"] == {"x": 210, "y": 280}
+    assert target["resolver_source"] == "parsed_navigation_button"
 
 
 def test_click_option_resolves_from_parsed_bbox_center_when_click_point_missing() -> None:

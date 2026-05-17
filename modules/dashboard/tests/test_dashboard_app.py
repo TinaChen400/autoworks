@@ -165,6 +165,86 @@ def test_runtime_summary_enables_dry_run_when_gate_allowed(tmp_path: Path) -> No
     assert summary["can_run"]["real_click"] is True
 
 
+def test_dashboard_shows_session_prompt_and_recent_answers(tmp_path: Path) -> None:
+    write_ready_chain(tmp_path)
+    write_json(
+        tmp_path / "latest_survey_session.json",
+        {
+            "session_id": "session_new",
+            "flow_status": "question_page",
+            "session_continuity": "new_session",
+            "session_continuity_reason": "Previous survey was terminal and a new question page appeared.",
+            "current_page_index": 1,
+            "pages": [{"page_index": 1}],
+            "recent_answers": [
+                {
+                    "page_index": 1,
+                    "question_id": "q1",
+                    "question_text": "Do you play any benefits decision role?",
+                    "answer_text": "No",
+                    "confirmed": True,
+                }
+            ],
+        },
+    )
+    write_json(
+        tmp_path / "latest_session_update_report.json",
+        {
+            "ok": True,
+            "flow_status": "question_page",
+            "session_continuity": "new_session",
+            "session_continuity_reason": "Previous survey was terminal and a new question page appeared.",
+        },
+    )
+
+    summary = build_runtime_summary(tmp_path)
+    html = render_dashboard(tmp_path)
+
+    assert summary["session"]["session_continuity"] == "new_session"
+    assert summary["session"]["recent_answer_count"] == 1
+    assert "Session prompt" in html
+    assert "new_session" in html
+    assert "Do you play any benefits decision role? -> No" in html
+
+
+def test_no_action_plan_stops_downstream_controls(tmp_path: Path) -> None:
+    write_ready_chain(tmp_path)
+    write_json(
+        tmp_path / "latest_answer_decision.json",
+        {
+            "decision_id": "decision_1",
+            "requires_human_review": False,
+            "flow_status": "finished",
+            "question_decisions": [],
+        },
+    )
+    write_json(
+        tmp_path / "latest_action_plan.json",
+        {
+            "action_plan_id": "action_plan_1",
+            "source_decision_id": "decision_1",
+            "status": "no_action",
+            "actions": [],
+        },
+    )
+    write_json(tmp_path / "latest_action_plan_report.json", {"validation_passed": True})
+    touch_in_order(
+        [
+            tmp_path / "latest_orchestrated_parse.json",
+            tmp_path / "latest_answer_decision.json",
+            tmp_path / "latest_answer_engine_report.json",
+            tmp_path / "latest_action_plan.json",
+            tmp_path / "latest_action_plan_report.json",
+        ]
+    )
+
+    summary = build_runtime_summary(tmp_path)
+
+    assert summary["action_plan"]["status"] == "no_action"
+    assert summary["can_run"]["target_resolver"] is False
+    assert summary["can_run"]["execution_gate"] is False
+
+
 def test_human_review_blocks_downstream_controls(tmp_path: Path) -> None:
     write_ready_chain(tmp_path)
     write_json(
@@ -379,6 +459,7 @@ def test_render_dashboard_shows_click_point_and_real_click_is_separate(tmp_path:
     assert "Refresh Targets" in html
     assert "Snap Target" not in html
     assert "Run Dry-Run Executor" in html
+    assert "Run Session Loop" in html
     assert "Real Click 1 Action" in html
     assert "/run-real-click-once" in html
     assert "parsed_control_click_point" in html

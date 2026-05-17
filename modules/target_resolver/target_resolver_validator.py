@@ -41,30 +41,39 @@ def validate_resolved_action_plan(plan: dict[str, Any], resolver_issues: list[di
                     "paths": paths,
                 }
             )
-        if skill == "click_option":
+        if skill in {"click_option", "click_navigation"}:
             required = [
-                "question_id",
-                "option_id",
-                "option_text",
-                "control_element_id",
-                "control_type",
                 "click_point_norm",
                 "click_point_raw",
                 "click_point_screen",
                 "resolver_confidence",
             ]
+            if skill == "click_option":
+                required.extend(
+                    [
+                        "question_id",
+                        "option_id",
+                        "option_text",
+                        "control_element_id",
+                        "control_type",
+                    ]
+                )
+            else:
+                required.extend(["button_id", "action", "text"])
             missing = [key for key in required if key not in target]
             if missing:
                 issues.append(
                     {
-                        "type": "unresolved_click_option",
+                        "type": "unresolved_click_navigation"
+                        if skill == "click_navigation"
+                        else "unresolved_click_option",
                         "action_id": action.get("action_id", ""),
                         "question_id": target.get("question_id", ""),
                         "option_id": target.get("option_id", ""),
+                        "button_id": target.get("button_id", ""),
                         "missing": missing,
                     }
                 )
-
     return {
         "validation_passed": not issues,
         "issues": issues,
@@ -73,7 +82,7 @@ def validate_resolved_action_plan(plan: dict[str, Any], resolver_issues: list[di
             1
             for action in actions
             if isinstance(action, dict)
-            and action.get("skill") == "click_option"
+            and action.get("skill") in {"click_option", "click_navigation"}
             and not _coordinate_paths(action.get("target", {})) == []
             and "click_point_screen" in (action.get("target") or {})
         ),

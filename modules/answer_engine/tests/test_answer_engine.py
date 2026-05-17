@@ -207,6 +207,26 @@ def test_answer_engine_does_not_call_external_llm(tmp_path, monkeypatch):
     assert input_loader.load_config()["allow_llm_answerer"] is False
 
 
+def test_answer_engine_stops_when_session_flow_is_terminal(tmp_path, monkeypatch):
+    _patch_answer_engine_paths(monkeypatch, tmp_path)
+    _write_json(tmp_path / "config" / "answer_engine.json", {"minimum_confidence_without_review": 0.85})
+    _write_json(
+        tmp_path / "runtime_state" / "latest_survey_session.json",
+        {"session_id": "session_1", "task_id": "t1", "flow_status": "kicked_out"},
+    )
+    _write_json(
+        tmp_path / "runtime_state" / "latest_local_parse.json",
+        {"parsed_page": {"task_id": "t1", "page": {"confidence": 1.0}, "questions": [account_question()]}},
+    )
+
+    decision, report = answer_engine.build_answer_decision("auto")
+
+    assert decision["question_decisions"] == []
+    assert decision["flow_status"] == "kicked_out"
+    assert report["requires_human_review"] is False
+    assert report["flow_status"] == "kicked_out"
+
+
 def test_profile_llm_single_choice_selects_existing_option(tmp_path, monkeypatch):
     _patch_answer_engine_paths(monkeypatch, tmp_path)
     _write_json(

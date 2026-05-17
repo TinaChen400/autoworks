@@ -9,6 +9,7 @@ from pathlib import Path
 from modules.page_state_manager import input_loader, session_manager, session_store
 from modules.page_state_manager.consistency_checker import detect_conflicting_answer
 from modules.page_state_manager.schema import new_session
+from modules.page_state_manager.session_lite import classify_flow_status
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -171,7 +172,86 @@ def test_session_manager_adds_current_page_to_latest_survey_session(tmp_path, mo
     session = session_manager.update_session()
     assert session["current_page_index"] == 1
     assert session["pages"][0]["questions"][0]["question_id"] == "q1"
+    assert session["flow_status"] == "question_page"
     assert (tmp_path / "runtime_state" / "latest_survey_session.json").exists()
+
+
+def test_session_lite_detects_finished_page():
+    parsed_page = {
+        "page": {"page_type": "questionnaire", "summary": "Thank you, your response has been recorded."},
+        "questions": [],
+        "navigation_buttons": [],
+    }
+
+    assert classify_flow_status(parsed_page) == "finished"
+
+
+def test_session_lite_detects_kicked_out_page():
+    parsed_page = {
+        "page": {"page_type": "questionnaire", "summary": "Unfortunately you are not qualified for this survey."},
+        "questions": [],
+        "navigation_buttons": [],
+    }
+
+    assert classify_flow_status(parsed_page) == "kicked_out"
+
+
+def test_session_manager_records_recent_answer_text_not_option_id(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    parse_path = _write_parse(tmp_path, question_text="Do you play any benefits decision role?")
+    _write_json(
+        tmp_path / "runtime_state" / "latest_answer_decision.json",
+        {
+            "decision_id": "decision_1",
+            "source_parse": str(parse_path),
+            "question_decisions": [
+                {
+                    "question_id": "q1",
+                    "question_text": "Do you play any benefits decision role?",
+                    "recommended_option_ids": ["T50"],
+                    "recommended_text_answer": "",
+                    "click_targets": [{"option_id": "T50", "text": "No"}],
+                    "confidence": 0.95,
+                    "requires_human_review": False,
+                }
+            ],
+        },
+    )
+
+    session = session_manager.update_session()
+
+    assert session["recent_answers"][-1]["answer_text"] == "No"
+    assert session["recent_answers"][-1]["confirmed"] is False
+    assert session["consistency_memory"][-1]["value"] == "No"
+
+
+def test_terminal_session_starts_new_session_when_question_page_appears(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    old_session = new_session("task1")
+    old_session["session_id"] = "session_old"
+    old_session["flow_status"] = "finished"
+    old_session["pages"] = [{"page_index": 1, "questions": []}]
+    old_session["recent_answers"] = [
+        {
+            "page_index": 1,
+            "question_id": "q_old",
+            "question_text": "Old survey question",
+            "answer_text": "Old answer",
+            "confirmed": True,
+            "decision_id": "decision_old",
+        }
+    ]
+    _write_json(tmp_path / "runtime_state" / "latest_survey_session.json", old_session)
+    _write_parse(tmp_path, question_text="New survey question?")
+
+    session = session_manager.update_session()
+
+    assert session["session_id"] != "session_old"
+    assert session["session_continuity"] == "new_session"
+    assert session["flow_status"] == "question_page"
+    assert session["current_page_index"] == 1
+    assert len(session["pages"]) == 1
+    assert session["recent_answers"] == []
 
 
 def test_session_manager_rerun_same_parse_is_idempotent(tmp_path, monkeypatch):

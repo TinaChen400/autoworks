@@ -8,7 +8,8 @@ from pathlib import Path
 from .consistency_checker import detect_decision_contradictions, normalize_key
 from .input_loader import load_latest_answer_decision, load_latest_parse, resolve_parse_source
 from .page_history import normalize_text, question_summaries, similar_questions
-from .schema import memory_fact, page_record, utc_now_iso
+from .schema import memory_fact, new_session, page_record, utc_now_iso
+from .session_lite import answer_text_from_decision, append_recent_answers, classify_flow_status
 from .session_store import load_session, save_session
 
 ROOT = Path.cwd()
@@ -95,7 +96,7 @@ def _decision_facts(decision: dict | None) -> list[dict]:
         return []
     facts = []
     for qd in decision.get("question_decisions", []):
-        value = qd.get("recommended_text_answer") or ", ".join(qd.get("recommended_option_ids", []))
+        value = answer_text_from_decision(qd)
         if not qd.get("requires_human_review") and value:
             facts.append(
                 memory_fact(
@@ -113,6 +114,22 @@ def _visual_element_count(parsed_page: dict) -> int:
     return len(visual_elements) if isinstance(visual_elements, list) else 0
 
 
+def _decision_matches_current_questions(decision: dict | None, questions: list[dict]) -> bool:
+    if not decision:
+        return False
+    current_texts = {
+        normalize_text(question.get("question_text", ""))
+        for question in questions
+        if question.get("question_text")
+    }
+    if not current_texts:
+        return False
+    for qd in decision.get("question_decisions", []) or []:
+        if normalize_text(qd.get("question_text", "")) in current_texts:
+            return True
+    return False
+
+
 def _requires_human_review(parsed_page: dict, warnings: list[dict]) -> bool:
     if parsed_page.get("requires_human_review") is True:
         return True
@@ -120,6 +137,11 @@ def _requires_human_review(parsed_page: dict, warnings: list[dict]) -> bool:
     if page.get("requires_human_review") is True:
         return True
     return any(warning.get("type") == "contradiction" for warning in warnings)
+
+
+def _should_start_new_session(session: dict, flow_status: str, questions: list[dict]) -> bool:
+    previous_status = session.get("flow_status", "unknown")
+    return previous_status in {"finished", "kicked_out"} and flow_status == "question_page" and bool(questions)
 
 
 def _write_report(report: dict) -> Path:
@@ -142,6 +164,9 @@ def _build_report(
     question_count: int = 0,
     visual_element_count: int = 0,
     requires_human_review: bool = False,
+    flow_status: str = "unknown",
+    session_continuity: str = "same_session",
+    session_continuity_reason: str = "",
     warnings: list | None = None,
     errors: list | None = None,
 ) -> dict:
@@ -155,6 +180,9 @@ def _build_report(
         "page_count": page_count,
         "question_count": question_count,
         "visual_element_count": visual_element_count,
+        "flow_status": flow_status,
+        "session_continuity": session_continuity,
+        "session_continuity_reason": session_continuity_reason,
         "requires_human_review": requires_human_review,
         "warnings": warnings or [],
         "errors": errors or [],
@@ -167,10 +195,21 @@ def update_session(source: str | Path = "auto", task_id: str = "") -> dict:
     decision = load_latest_answer_decision()
     effective_task_id = _task_id(parsed_page) or task_id
     session = load_session(effective_task_id)
+    page_type = _page_type(parsed_page)
+    flow_status = classify_flow_status(parsed_page)
+    questions = question_summaries(parsed_page.get("questions", []))
+    if _should_start_new_session(session, flow_status, questions):
+        session = new_session(effective_task_id)
+        session["session_continuity"] = "new_session"
+        session["session_continuity_reason"] = (
+            "Previous survey was terminal and a new question page appeared."
+        )
+    else:
+        session["session_continuity"] = "same_session"
+        session["session_continuity_reason"] = ""
     session["task_id"] = session.get("task_id") or effective_task_id
     pages = session.setdefault("pages", [])
-    page_type = _page_type(parsed_page)
-    questions = question_summaries(parsed_page.get("questions", []))
+    decision_matches_current = _decision_matches_current_questions(decision, questions)
     existing_page_index = _find_existing_page_index(pages, source_path, page_type, questions)
     pages_for_history = [page for index, page in enumerate(pages) if index != existing_page_index]
 
@@ -186,7 +225,7 @@ def update_session(source: str | Path = "auto", task_id: str = "") -> dict:
                 }
             )
 
-    conflicts = detect_decision_contradictions(session, decision)
+    conflicts = detect_decision_contradictions(session, decision) if decision_matches_current else []
     for conflict in conflicts:
         warnings.append({"type": "contradiction", **conflict})
 
@@ -205,11 +244,13 @@ def update_session(source: str | Path = "auto", task_id: str = "") -> dict:
         answer_decisions=answer_decisions,
         status=status,
     )
+    incoming_page["flow_status"] = flow_status
     if existing_page_index is None:
         pages.append(incoming_page)
     else:
         pages[existing_page_index] = _merge_existing_page(pages[existing_page_index], incoming_page)
     session["current_page_index"] = page_index
+    session["flow_status"] = flow_status
 
     detected_types = {q.get("question_type", "unknown") for q in parsed_page.get("questions", [])}
     existing_types = set(session.get("known_context", {}).get("detected_question_types", []))
@@ -222,11 +263,21 @@ def update_session(source: str | Path = "auto", task_id: str = "") -> dict:
         (fact.get("fact_key", ""), fact.get("value", ""))
         for fact in session.get("consistency_memory", [])
     }
-    for fact in _decision_facts(decision):
+    decision_facts = _decision_facts(decision) if decision_matches_current else []
+    for fact in decision_facts:
         key = (fact.get("fact_key", ""), fact.get("value", ""))
         if key not in existing_facts:
             session.setdefault("consistency_memory", []).append(fact)
             existing_facts.add(key)
+
+    if decision_matches_current:
+        append_recent_answers(
+            session,
+            page_index=page_index,
+            decision_id=decision.get("decision_id", ""),
+            question_decisions=decision.get("question_decisions", []),
+            confirmed=False,
+        )
 
     session["updated_at"] = utc_now_iso()
     save_session(session)
@@ -252,6 +303,9 @@ def update_session_with_report(
             page_count=len(session.get("pages", [])),
             question_count=len(parsed_page.get("questions", []) or []),
             visual_element_count=_visual_element_count(parsed_page),
+            flow_status=session.get("flow_status", "unknown"),
+            session_continuity=session.get("session_continuity", "same_session"),
+            session_continuity_reason=session.get("session_continuity_reason", ""),
             requires_human_review=_requires_human_review(parsed_page, warnings),
             warnings=warnings,
             errors=[],

@@ -79,6 +79,21 @@ def _action(
     }
 
 
+def _navigation_action() -> dict:
+    return {
+        "action_id": "a2",
+        "skill": "click_navigation",
+        "target": {
+            "button_id": "nav_next",
+            "action": "next_page",
+            "text": "Next",
+            "click_point_screen": {"x": 260, "y": 290},
+        },
+        "params": {},
+        "requires_review": False,
+    }
+
+
 def _gate(allowed: bool = True, actions: list[dict] | None = None) -> dict:
     return {
         "execution_gate_id": "execution_gate_1",
@@ -106,6 +121,27 @@ def test_dry_run_does_not_call_real_mouse_api(tmp_path: Path) -> None:
     assert report["executed_action_count"] == 1
     assert report["action_records"][0]["status"] == "would_click"
     assert run_payload["dry_run"] is True
+
+
+def test_click_navigation_executes_without_selection_verification(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True, [_navigation_action()]))
+    fake_mouse = FakeMouse()
+    fake_capture = FakeAfterClickCapture(runtime)
+
+    _run_payload, report = run(
+        "auto",
+        runtime_dir=runtime,
+        mouse_api=fake_mouse,
+        capture_api=fake_capture,
+    )
+
+    assert fake_mouse.calls == [(260, 290, 120)]
+    assert fake_capture.calls == 0
+    assert report["validation_passed"] is True
+    assert report["executed_action_count"] == 1
+    assert report["action_records"][0]["skill"] == "click_navigation"
+    assert report["action_records"][0]["status"] == "clicked"
 
 
 def test_gate_not_allowed_blocks_execution(tmp_path: Path) -> None:

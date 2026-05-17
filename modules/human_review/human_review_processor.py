@@ -4,6 +4,7 @@ import argparse
 from copy import deepcopy
 
 from modules.page_state_manager.schema import utc_now_iso
+from modules.page_state_manager.session_lite import append_recent_answers
 
 from . import review_store
 from .review_validator import CHOICE_QUESTION_TYPES, TEXT_QUESTION_TYPES, extract_parsed_page, validate_manual_review_input
@@ -136,6 +137,13 @@ def _update_session(session: dict, decision: dict, report: dict) -> dict:
             "approval_source": qd.get("approval_source", ""),
         }
 
+    append_recent_answers(
+        session,
+        page_index=page.get("page_index", session.get("current_page_index", 0)),
+        decision_id=decision.get("decision_id", ""),
+        question_decisions=decision.get("question_decisions", []),
+        confirmed=True,
+    )
     session["updated_at"] = utc_now_iso()
     return session
 

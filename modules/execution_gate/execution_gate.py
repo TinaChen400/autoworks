@@ -73,12 +73,12 @@ def evaluate_execution_gate(
             )
             continue
 
-        if skill == "click_option":
+        if skill in {"click_option", "click_navigation"}:
             if not _click_point_screen_present(action):
                 block_reasons.append(
                     block_reason(
                         "missing_click_point_screen",
-                        "click_option action is missing click_point_screen.",
+                        f"{skill} action is missing click_point_screen.",
                         action_id,
                     )
                 )
@@ -87,7 +87,7 @@ def evaluate_execution_gate(
                 block_reasons.append(
                     block_reason(
                         "resolver_confidence_below_threshold",
-                        "click_option resolver_confidence is below the execution threshold.",
+                        f"{skill} resolver_confidence is below the execution threshold.",
                         action_id,
                     )
                     | {

@@ -92,6 +92,19 @@ def _source_parse() -> dict:
     return {"parsed_page": {"task_id": "task1", "questions": [_session()["pages"][0]["questions"][0]]}}
 
 
+def _source_parse_with_navigation() -> dict:
+    payload = _source_parse()
+    payload["parsed_page"]["navigation_buttons"] = [
+        {
+            "button_id": "nav_next",
+            "action": "next_page",
+            "text": "Next",
+            "click_point_norm": {"x": 0.8, "y": 0.9},
+        }
+    ]
+    return payload
+
+
 def _decision(requires_human_review: bool, option_ids: list[str]) -> dict:
     return {
         "decision_id": "decision_1",
@@ -243,6 +256,31 @@ def test_human_review_required_generates_review_action_only(tmp_path, monkeypatc
     ]
 
 
+def test_terminal_flow_generates_no_action_plan(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    decision = _decision(False, [])
+    decision["question_decisions"] = []
+    decision["flow_status"] = "finished"
+    _write_json(tmp_path / "runtime_state" / "latest_survey_session.json", _session())
+    _write_json(tmp_path / "runtime_state" / "latest_answer_decision.json", decision)
+    _write_json(
+        tmp_path / "runtime_state" / "latest_answer_engine_report.json",
+        {
+            "validation_passed": True,
+            "issues": [],
+            "warnings": [{"type": "terminal_flow_status", "flow_status": "finished"}],
+            "requires_human_review": False,
+            "flow_status": "finished",
+        },
+    )
+
+    plan, report = action_plan_builder.build_action_plan("auto")
+
+    assert report["validation_passed"] is True
+    assert plan["status"] == "no_action"
+    assert plan["actions"] == []
+
+
 def test_multiple_choice_recommendations_generate_click_option_actions(tmp_path, monkeypatch):
     _patch_paths(monkeypatch, tmp_path)
     _write_json(tmp_path / "runtime_state" / "latest_survey_session.json", _session())
@@ -258,6 +296,30 @@ def test_multiple_choice_recommendations_generate_click_option_actions(tmp_path,
     assert [item["skill"] for item in plan["actions"]] == ["click_option", "click_option"]
     assert [item["target"]["option_id"] for item in plan["actions"]] == ["o1", "o2"]
     assert plan["actions"][0]["target"]["option_text"] == "Retail Central"
+
+
+def test_ready_plan_appends_navigation_action_when_available(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    _write_json(tmp_path / "runtime_state" / "latest_survey_session.json", _session())
+    _write_json(tmp_path / "runtime_state" / "latest_answer_decision.json", _decision(False, ["o1"]))
+    _write_json(
+        tmp_path / "runtime_state" / "latest_orchestrated_parse.json",
+        _source_parse_with_navigation(),
+    )
+    _write_json(
+        tmp_path / "runtime_state" / "latest_answer_engine_report.json",
+        {"validation_passed": True, "issues": [], "warnings": [], "requires_human_review": False},
+    )
+
+    plan, report = action_plan_builder.build_action_plan("auto")
+
+    assert report["validation_passed"] is True
+    assert [item["skill"] for item in plan["actions"]] == ["click_option", "click_navigation"]
+    assert plan["actions"][1]["target"] == {
+        "button_id": "nav_next",
+        "action": "next_page",
+        "text": "Next",
+    }
 
 
 def test_coordinates_are_never_written_to_latest_action_plan(tmp_path, monkeypatch):

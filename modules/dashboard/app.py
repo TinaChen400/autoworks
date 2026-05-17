@@ -114,6 +114,9 @@ def action_rows(actions: list[Any]) -> list[dict[str, Any]]:
                 "question_id": target.get("question_id", action.get("question_id", "")),
                 "option_id": target.get("option_id", action.get("option_id", "")),
                 "option_text": target.get("option_text", action.get("option_text", "")),
+                "button_id": target.get("button_id", action.get("button_id", "")),
+                "navigation_action": target.get("action", action.get("navigation_action", "")),
+                "navigation_text": target.get("text", action.get("navigation_text", "")),
                 "resolver_source": target.get("resolver_source", ""),
                 "resolver_confidence": target.get("resolver_confidence", ""),
                 "click_point_screen": target.get("click_point_screen", action.get("click_point_screen", "")),
@@ -136,6 +139,9 @@ def executor_rows(executor_run: dict[str, Any]) -> list[dict[str, Any]]:
                 "question_id": record.get("question_id", ""),
                 "option_id": record.get("option_id", ""),
                 "option_text": record.get("option_text", ""),
+                "button_id": record.get("button_id", ""),
+                "navigation_action": record.get("navigation_action", ""),
+                "navigation_text": record.get("navigation_text", ""),
                 "click_point_screen": record.get("click_point_screen", ""),
                 "status": record.get("status", ""),
                 "verified_candidate_index": record.get("verified_candidate_index", ""),
@@ -197,6 +203,8 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     gate_path = runtime_state_dir / "latest_execution_gate.json"
     capture_path = runtime_state_dir / "latest_capture.png"
 
+    survey_session = read_json(runtime_state_dir / "latest_survey_session.json")
+    session_report = read_json(runtime_state_dir / "latest_session_update_report.json")
     parse_report = read_json(runtime_state_dir / "latest_parse_orchestrator_report.json")
     parse_metrics = read_json(runtime_state_dir / "latest_parse_metrics.json")
     orchestrated_parse = read_json(runtime_state_dir / "latest_orchestrated_parse.json")
@@ -229,6 +237,9 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     resolved_actions = action_rows(resolved_plan.get("actions", []) or [])
     executable_actions = action_rows(gate.get("executable_actions", []) or [])
     executor_records = executor_rows(executor_run)
+    recent_answers = survey_session.get("recent_answers", [])
+    if not isinstance(recent_answers, list):
+        recent_answers = []
 
     qd = first_question_decision(effective_decision)
     resolved_action = first_action(resolved_plan)
@@ -244,6 +255,7 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     answer_ok = answer_validation_ok and not bool_ok(
         effective_decision.get("requires_human_review")
     )
+    action_plan_no_action = action_plan.get("status") == "no_action"
     action_plan_ok = (
         validation_passed(action_plan_report)
         and action_plan.get("status") not in {"human_review_required", "blocked", "invalid"}
@@ -282,7 +294,13 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
     action_plan_ready = (
         answer_ready and action_plan_ok and action_plan_fresh and action_plan_lineage_ok
     )
-    target_ready = action_plan_ready and target_ok and target_fresh and target_lineage_ok
+    target_ready = (
+        action_plan_ready
+        and not action_plan_no_action
+        and target_ok
+        and target_fresh
+        and target_lineage_ok
+    )
     gate_ready = target_ready and gate_allowed and gate_fresh and gate_lineage_ok
 
     blockers = {
@@ -399,8 +417,23 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
             "fresh": answer_fresh,
             "blocked_reason": blockers["answer"],
         },
+        "session": {
+            "status": session_status(survey_session, session_report),
+            "flow_status": survey_session.get("flow_status")
+            or session_report.get("flow_status", ""),
+            "session_continuity": survey_session.get("session_continuity")
+            or session_report.get("session_continuity", ""),
+            "session_continuity_reason": survey_session.get("session_continuity_reason")
+            or session_report.get("session_continuity_reason", ""),
+            "current_page_index": survey_session.get("current_page_index", ""),
+            "page_count": len(survey_session.get("pages", []) or []),
+            "recent_answer_count": len(recent_answers),
+            "recent_answers": recent_answers[-5:],
+            "validation_passed": validation_passed(session_report),
+            "blocked_reason": session_report.get("errors", []),
+        },
         "action_plan": {
-            "status": "ready" if action_plan_ready else "blocked",
+            "status": "no_action" if action_plan_no_action else "ready" if action_plan_ready else "blocked",
             "skill": (first_action(action_plan).get("skill") or resolved_action.get("skill") or ""),
             "option_id": action_target(first_action(action_plan)).get("option_id")
             or target.get("option_id", ""),
@@ -457,12 +490,26 @@ def build_runtime_summary(runtime_state_dir: Path) -> dict[str, Any]:
             and (runtime_state_dir / "latest_layout_index.json").exists(),
             "answer": parse_ready and parse_fresh,
             "action_plan": answer_ready,
-            "target_resolver": action_plan_ready,
+            "target_resolver": action_plan_ready and not action_plan_no_action,
             "execution_gate": target_ready,
             "executor_dry_run": gate_ready,
             "real_click": gate_ready,
         },
     }
+
+
+def session_status(session: dict[str, Any], report: dict[str, Any]) -> str:
+    flow_status = str(session.get("flow_status") or report.get("flow_status") or "")
+    continuity = str(session.get("session_continuity") or report.get("session_continuity") or "")
+    if flow_status == "finished":
+        return "completed"
+    if flow_status == "kicked_out":
+        return "blocked"
+    if continuity == "possible_new_session":
+        return "waiting_review"
+    if validation_passed(report):
+        return "ready"
+    return "unknown"
 
 
 def option_texts(question_decision: dict[str, Any]) -> list[str]:
@@ -683,6 +730,7 @@ def render_dashboard(runtime_state_dir: Path = RUNTIME_STATE_DIR) -> str:
     </section>
     <section>
       <h2>Latest Answer Decision</h2>
+      {render_session_memory(summary)}
       {render_answer_brief(summary)}
       <pre>{escape(json.dumps(reviewed_decision or decision, indent=2, ensure_ascii=False))}</pre>
     </section>
@@ -737,6 +785,10 @@ def render_controls(target_locked: bool, summary: dict[str, Any]) -> str:
             '<form method="post" action="/run-preview">'
             f'<button class="primary"{run_disabled}>Run Full Dry Preview</button></form>'
         ),
+        (
+            '<form method="post" action="/run-session-loop">'
+            f'<button class="danger"{run_disabled}>Run Session Loop</button></form>'
+        ),
         control_form(
             "/run-real-click-once",
             real_click_label,
@@ -771,6 +823,7 @@ def render_dashboard_action(action: dict[str, Any]) -> str:
 def render_run_summary(summary: dict[str, Any]) -> str:
     rows = [
         ("Parse", summary.get("parse", {})),
+        ("Session", summary.get("session", {})),
         ("Answer", summary.get("answer", {})),
         ("Action Plan", summary.get("action_plan", {})),
         ("Target Resolver", summary.get("target_resolver", {})),
@@ -819,6 +872,52 @@ def render_action_review(summary: dict[str, Any]) -> str:
     )
 
 
+def render_session_memory(summary: dict[str, Any]) -> str:
+    session = summary.get("session", {})
+    recent_answers = session.get("recent_answers", [])
+    if not isinstance(recent_answers, list):
+        recent_answers = []
+    continuity = str(session.get("session_continuity") or "")
+    reason = str(session.get("session_continuity_reason") or "")
+    prompt = ""
+    if continuity and continuity != "same_session":
+        prompt = (
+            '<p class="muted">'
+            f"Session prompt: <span class=\"badge\">{escape(continuity)}</span> "
+            f"{escape(reason)}"
+            "</p>"
+        )
+    summary_line = (
+        '<p class="muted">'
+        f"Session: flow={escape(session.get('flow_status', ''))}; "
+        f"page={escape(session.get('current_page_index', ''))}/"
+        f"{escape(session.get('page_count', ''))}; "
+        f"recent answers={escape(session.get('recent_answer_count', 0))}"
+        "</p>"
+    )
+    if not recent_answers:
+        return prompt + summary_line
+    rows = []
+    for item in reversed(recent_answers[-5:]):
+        question = str(item.get("question_text") or item.get("question_id") or "")
+        answer = str(item.get("answer_text") or "")
+        confirmed = "confirmed" if item.get("confirmed") else "candidate"
+        rows.append(
+            "<li>"
+            f"{escape(short_text(question, 90))} -> {escape(short_text(answer, 60))} "
+            f"<span class=\"badge\">{escape(confirmed)}</span>"
+            "</li>"
+        )
+    return prompt + summary_line + "<ul>" + "".join(rows) + "</ul>"
+
+
+def short_text(value: str, limit: int) -> str:
+    value = " ".join(str(value or "").split())
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 3)].rstrip() + "..."
+
+
 def render_action_table(label: str, rows: list[dict[str, Any]]) -> str:
     if not rows:
         return f'<p class="muted">{escape(label)}: none</p>'
@@ -830,7 +929,7 @@ def render_action_table(label: str, rows: list[dict[str, Any]]) -> str:
             f"<td>{escape(row.get('action_id', ''))}</td>"
             f"<td>{escape(row.get('question_id', ''))}</td>"
             f"<td>{escape(row.get('option_id', ''))}</td>"
-            f"<td>{escape(row.get('option_text', ''))}</td>"
+            f"<td>{escape(row.get('option_text', '') or row.get('navigation_text', ''))}</td>"
             f"<td>{escape(row.get('click_point_screen', ''))}</td>"
             f"<td>{escape(row.get('resolver_source', ''))}</td>"
             f"<td>{escape(row.get('resolver_confidence', ''))}</td>"
@@ -857,7 +956,7 @@ def render_executor_table(rows: list[dict[str, Any]]) -> str:
             f"<td>{escape(row.get('index', ''))}</td>"
             f"<td>{escape(row.get('action_id', ''))}</td>"
             f"<td>{escape(row.get('question_id', ''))}</td>"
-            f"<td>{escape(row.get('option_text', ''))}</td>"
+            f"<td>{escape(row.get('option_text', '') or row.get('navigation_text', ''))}</td>"
             f"<td>{escape(row.get('click_point_screen', ''))}</td>"
             f"<td style=\"color:{status_color(status)}\">{escape(status)}</td>"
             f"<td>{escape(row.get('verified_candidate_index', ''))}</td>"
@@ -876,7 +975,7 @@ def render_executor_table(rows: list[dict[str, Any]]) -> str:
 
 
 def compact_details(data: dict[str, Any]) -> str:
-    skip = {"status", "blocked_reason", "block_reasons"}
+    skip = {"status", "blocked_reason", "block_reasons", "recent_answers"}
     parts = []
     for key, value in data.items():
         if key in skip or value == "" or value == [] or value == {} or value is None:
@@ -1040,7 +1139,7 @@ def collect_messages(pipeline: dict[str, Any], key: str) -> list[str]:
 
 
 def status_color(status: str) -> str:
-    if status in {"success", "completed", "allowed", "ready"}:
+    if status in {"success", "completed", "allowed", "ready", "no_action"}:
         return "var(--ok)"
     if status in {"failed", "blocked", "not_allowed", "invalid"}:
         return "var(--bad)"
@@ -1126,6 +1225,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "modules.autoworks_runner.run_once",
                     "--mode",
                     "preview",
+                    "--parser-mode",
+                    "ollama",
+                    "--ocr",
+                    "rapidocr",
+                ]
+                self.run_dashboard_command(command)
+                self.redirect_home()
+                return
+            if self.path == "/run-session-loop":
+                locked_target = read_json(self.runtime_state_dir / "latest_locked_target.json")
+                if locked_target.get("target_locked") is not True:
+                    self.write_blocked_lock()
+                    self.redirect_home()
+                    return
+                command = [
+                    sys.executable,
+                    "-m",
+                    "modules.autoworks_runner.run_once",
+                    "--mode",
+                    "session",
                     "--parser-mode",
                     "ollama",
                     "--ocr",

@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 
-SUPPORTED_REAL_EXECUTION_SKILLS = {"click_option"}
+SUPPORTED_REAL_EXECUTION_SKILLS = {"click_option", "click_navigation"}
 
 
 def _error(code: str, message: str, action_id: str = "", skill: str = "") -> dict[str, Any]:
@@ -111,6 +111,9 @@ def action_record(action: dict[str, Any], x: int, y: int, dry_run: bool) -> dict
         "question_id": target.get("question_id", ""),
         "option_id": target.get("option_id", ""),
         "option_text": target.get("option_text", ""),
+        "button_id": target.get("button_id", ""),
+        "navigation_action": target.get("action", ""),
+        "navigation_text": target.get("text", ""),
         "click_point_screen": {"x": x, "y": y},
         "click_candidates": click_candidates(action, x, y),
         "real_execution": not dry_run,
@@ -156,7 +159,12 @@ def validate_gate_for_real_execution(gate: dict[str, Any] | None, dry_run: bool)
         skill = str(action.get("skill") or "")
         if skill not in SUPPORTED_REAL_EXECUTION_SKILLS:
             errors.append(
-                _error("unsupported_skill", "Only click_option can be executed.", action_id, skill)
+                _error(
+                    "unsupported_skill",
+                    "Only click_option and click_navigation can be executed.",
+                    action_id,
+                    skill,
+                )
             )
             continue
         if action.get("requires_review") is not False:
@@ -180,7 +188,7 @@ def validate_gate_for_real_execution(gate: dict[str, Any] | None, dry_run: bool)
             errors.append(
                 _error(
                     "missing_click_point_screen",
-                    "click_option action requires numeric target.click_point_screen x/y.",
+                    f"{skill} action requires numeric target.click_point_screen x/y.",
                     action_id,
                     skill,
                 )

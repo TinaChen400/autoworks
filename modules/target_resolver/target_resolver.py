@@ -119,6 +119,22 @@ def _find_exact_parsed_option(
     return None
 
 
+def _find_navigation_button(
+    orchestrated_parse: dict[str, Any],
+    button_id: Any,
+    action_name: Any,
+) -> dict[str, Any] | None:
+    page = parsed_page(orchestrated_parse)
+    for button in page.get("navigation_buttons", []) or []:
+        if not isinstance(button, dict):
+            continue
+        if button_id and button.get("button_id") == button_id:
+            return button
+        if action_name and button.get("action") == action_name:
+            return button
+    return None
+
+
 def _selection_control(option: dict[str, Any]) -> str:
     return str(
         option.get("selection_control")
@@ -508,6 +524,55 @@ def resolve_action_plan(
 
         if skill == "request_human_review":
             actions.append(_strip_coordinates(resolved))
+            continue
+
+        if skill == "click_navigation":
+            target = resolved.get("target") if isinstance(resolved.get("target"), dict) else {}
+            button_id = str(target.get("button_id") or "")
+            action_name = str(target.get("action") or "")
+            button = _find_navigation_button(orchestrated_parse, button_id, action_name)
+            if button is None:
+                issues.append(
+                    unresolved_issue(
+                        resolved,
+                        "navigation_button_not_found",
+                        "click_navigation target was not found in latest_orchestrated_parse.json",
+                    )
+                )
+                actions.append(resolved)
+                continue
+            click_point_norm = _numeric_point(button.get("click_point_norm"))
+            if click_point_norm is None:
+                click_point_norm = _numeric_bbox_center(button.get("bbox_norm"))
+            navigation_geometry = _candidate_from_norm(
+                "parsed_navigation_button",
+                click_point_norm,
+                runtime_context,
+                float(button.get("confidence", 1.0) or 1.0),
+                str(button.get("button_id") or button_id),
+                "navigation_button",
+                is_primary=True,
+            )
+            if navigation_geometry is None:
+                issues.append(
+                    unresolved_issue(
+                        resolved,
+                        "navigation_geometry_not_found",
+                        "click_navigation button has no usable click geometry.",
+                    )
+                )
+                actions.append(resolved)
+                continue
+            resolved["target"] = {
+                "button_id": str(button.get("button_id") or button_id),
+                "action": str(button.get("action") or action_name),
+                "text": str(button.get("text") or button.get("label") or target.get("text") or ""),
+                "resolver_source": "parsed_navigation_button",
+                "resolver_confidence": navigation_geometry.pop("confidence", 1.0),
+                "click_candidates": [navigation_geometry],
+                **navigation_geometry,
+            }
+            actions.append(resolved)
             continue
 
         if skill != "click_option":

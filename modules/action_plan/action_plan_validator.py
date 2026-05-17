@@ -21,11 +21,12 @@ COORDINATE_KEYS = {
 VALID_SKILLS = {
     "request_human_review",
     "click_option",
+    "click_navigation",
     "type_text",
     "select_dropdown",
 }
 
-VALID_STATUSES = {"human_review_required", "ready", "invalid"}
+VALID_STATUSES = {"human_review_required", "ready", "invalid", "no_action"}
 
 
 def _find_coordinate_keys(value: object, path: str = "$") -> list[str]:
@@ -51,7 +52,9 @@ def validate_action_plan(plan: dict) -> dict:
         issues.append({"type": "invalid_status", "status": status})
 
     actions = plan.get("actions", [])
-    if not isinstance(actions, list) or not actions:
+    if not isinstance(actions, list):
+        issues.append({"type": "missing_actions"})
+    elif not actions and status != "no_action":
         issues.append({"type": "missing_actions"})
     else:
         for item in actions:
@@ -59,7 +62,10 @@ def validate_action_plan(plan: dict) -> dict:
             if skill not in VALID_SKILLS:
                 issues.append({"type": "invalid_skill", "skill": skill})
             target = item.get("target", {})
-            unexpected = sorted(set(target) - {"question_id", "option_id", "option_text"})
+            unexpected = sorted(
+                set(target)
+                - {"question_id", "option_id", "option_text", "button_id", "action", "text"}
+            )
             if unexpected:
                 issues.append(
                     {

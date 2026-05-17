@@ -17,6 +17,7 @@ from modules.autoworks_runner.run_once import (
     PIPELINE_STEPS,
     parse_quality_issues,
     run_once,
+    run_session_until_terminal,
 )
 
 
@@ -65,6 +66,42 @@ def test_pipeline_state_writes_snapshot_and_events(tmp_path: Path) -> None:
     ]
 
 
+def test_session_loop_stops_when_terminal_flow_detected(tmp_path: Path, monkeypatch) -> None:
+    calls = 0
+
+    def fake_run_once(**kwargs):
+        nonlocal calls
+        calls += 1
+        runtime = kwargs["runtime_state_dir"]
+        runtime.mkdir(parents=True, exist_ok=True)
+        (runtime / "latest_survey_session.json").write_text(
+            json.dumps({"flow_status": "finished"}),
+            encoding="utf-8",
+        )
+        (runtime / "latest_action_plan.json").write_text(
+            json.dumps({"status": "no_action"}),
+            encoding="utf-8",
+        )
+        (runtime / "latest_action_executor_report.json").write_text(
+            json.dumps({"executed_action_count": 0}),
+            encoding="utf-8",
+        )
+        return {"run_id": "run_1", "overall_status": "success"}
+
+    monkeypatch.setattr("modules.autoworks_runner.run_once.run_once", fake_run_once)
+
+    report = run_session_until_terminal(
+        runtime_state_dir=tmp_path,
+        max_pages=5,
+        wait_after_navigation_seconds=0,
+    )
+
+    assert calls == 1
+    assert report["status"] == "completed"
+    assert report["stop_reason"] == "terminal_flow_status:finished"
+    assert (tmp_path / "latest_session_loop_report.json").exists()
+
+
 def test_parse_quality_blocks_developer_window_content() -> None:
     issues = parse_quality_issues(
         {
@@ -88,6 +125,25 @@ def test_parse_quality_blocks_developer_window_content() -> None:
     )
 
     assert any("developer/local window" in issue for issue in issues)
+
+
+def test_parse_quality_allows_terminal_page_without_questions() -> None:
+    issues = parse_quality_issues(
+        {
+            "parsed_page": {
+                "page": {
+                    "page_type": "questionnaire",
+                    "confidence": 0.9,
+                    "summary": "Thank you, your response has been recorded.",
+                },
+                "questions": [],
+                "navigation_buttons": [],
+            }
+        },
+        allow_fake=False,
+    )
+
+    assert issues == []
 
 
 def test_parse_quality_waits_when_parse_requires_review() -> None:

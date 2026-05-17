@@ -9,6 +9,7 @@ from .schema import action, new_action_plan
 
 
 HUMAN_REVIEW_TYPES = {"unknown", "matrix", "image", "image_task"}
+NAVIGATION_ACTIONS = {"next_page", "continue", "submit"}
 ACTION_PLAN_ARTIFACT_PATH = "runtime_state/latest_action_plan.json"
 RAW_DECISION_ARTIFACT_PATH = "runtime_state/latest_answer_decision.json"
 REVIEWED_DECISION_ARTIFACT_PATH = "runtime_state/latest_reviewed_answer_decision.json"
@@ -92,6 +93,30 @@ def _target(question_id: str, option_id: str = "", option_text: str = "") -> dic
     if option_text:
         target["option_text"] = option_text
     return target
+
+
+def _navigation_target(button: dict) -> dict:
+    text = button.get("text") or button.get("label") or ""
+    return {
+        "button_id": button.get("button_id", ""),
+        "action": button.get("action", ""),
+        "text": text,
+    }
+
+
+def _navigation_button(source_page: dict) -> dict:
+    buttons = source_page.get("navigation_buttons", [])
+    if not isinstance(buttons, list):
+        return {}
+    for preferred in ("next_page", "continue", "submit"):
+        for button in buttons:
+            if (
+                isinstance(button, dict)
+                and button.get("action") == preferred
+                and button.get("action") in NAVIGATION_ACTIONS
+            ):
+                return button
+    return {}
 
 
 def _available_options(question: dict) -> list[dict]:
@@ -235,6 +260,9 @@ def build_action_plan(source: str = "auto") -> tuple[dict, dict]:
         for index, qd in enumerate(decision.get("question_decisions", []), start=1):
             question = _question_for_decision(page, source_page, qd.get("question_id", ""))
             actions.append(_review_action(f"a{index}", qd, question, "Answer decision validation failed."))
+    elif decision.get("flow_status") in {"finished", "kicked_out"}:
+        status = "no_action"
+        actions = []
     elif requires_human_review:
         status = "human_review_required"
         actions = []
@@ -249,6 +277,15 @@ def build_action_plan(source: str = "auto") -> tuple[dict, dict]:
             for built in _actions_for_decision(qd, question):
                 built["action_id"] = f"a{len(actions) + 1}"
                 actions.append(built)
+        button = _navigation_button(source_page)
+        if button and not any(item.get("skill") == "request_human_review" for item in actions):
+            actions.append(
+                action(
+                    f"a{len(actions) + 1}",
+                    "click_navigation",
+                    _navigation_target(button),
+                )
+            )
 
     plan = new_action_plan(
         task_id=decision.get("task_id") or session.get("task_id", ""),

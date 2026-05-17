@@ -64,7 +64,7 @@ def _click_option_record(
     if click_point is None:
         return None, executor_failure(
             "missing_click_point_screen",
-            "click_option preview requires click_point_screen.",
+            f"{skill} preview requires click_point_screen.",
             action_id,
             skill,
         )
@@ -77,6 +77,9 @@ def _click_option_record(
         "question_id": target.get("question_id", ""),
         "option_id": target.get("option_id", ""),
         "option_text": target.get("option_text", ""),
+        "button_id": target.get("button_id", ""),
+        "navigation_action": target.get("action", ""),
+        "navigation_text": target.get("text", ""),
         "click_point_screen": click_point,
         "click_point_raw": _click_point_raw(action),
         "click_candidates": _click_candidates(action),
@@ -142,6 +145,9 @@ def _action_summary(action: dict[str, Any]) -> dict[str, Any]:
         "question_id": target.get("question_id", ""),
         "option_id": target.get("option_id", ""),
         "option_text": target.get("option_text", ""),
+        "button_id": target.get("button_id", ""),
+        "navigation_action": target.get("action", ""),
+        "navigation_text": target.get("text", ""),
         "click_point_screen": _click_point_screen(action),
         "click_point_raw": _click_point_raw(action),
         "click_candidates": _click_candidates(action),
@@ -245,7 +251,7 @@ def build_action_executor_preview(
     executable_actions = [
         action
         for action in source_actions
-        if isinstance(action, dict) and action.get("skill") == "click_option"
+        if isinstance(action, dict) and action.get("skill") in {"click_option", "click_navigation"}
     ]
     if not executable_actions:
         preview = new_action_executor_preview(

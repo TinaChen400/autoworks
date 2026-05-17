@@ -20,6 +20,9 @@ from .strategies import (
 )
 
 
+TERMINAL_FLOW_STATUSES = {"finished", "kicked_out"}
+
+
 def choose_strategy(question_type: str):
     return {
         "single_choice": single_choice_strategy,
@@ -38,6 +41,27 @@ def build_answer_decision(source: str = "auto") -> tuple[dict, dict]:
     parsed_page, source_path = load_parse(source)
     session = load_session()
     profile, profile_exists, _example = load_user_profile()
+
+    flow_status = (session or {}).get("flow_status", "unknown")
+    if flow_status in TERMINAL_FLOW_STATUSES:
+        decision = answer_decision(
+            task_id=parsed_page.get("task_id", ""),
+            source_parse=source_path,
+            session_id=(session or {}).get("session_id", ""),
+            question_decisions=[],
+        )
+        decision["flow_status"] = flow_status
+        decision["warnings"].append(f"Survey flow is terminal: {flow_status}.")
+        report = {
+            "validation_passed": True,
+            "issues": [],
+            "warnings": [{"type": "terminal_flow_status", "flow_status": flow_status}],
+            "requires_human_review": False,
+            "flow_status": flow_status,
+        }
+        save_decision(decision)
+        save_report(report)
+        return decision, report
 
     question_decisions = []
     for question in parsed_page.get("questions", []):

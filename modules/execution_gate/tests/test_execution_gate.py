@@ -52,6 +52,26 @@ def _click_action(confidence: float = 0.8, include_click_point: bool = True) -> 
     }
 
 
+def _navigation_action(confidence: float = 0.8, include_click_point: bool = True) -> dict:
+    target = {
+        "button_id": "nav_next",
+        "action": "next_page",
+        "text": "Next",
+        "click_point_norm": {"x": 0.8, "y": 0.9},
+        "click_point_raw": {"x": 160, "y": 90},
+        "resolver_confidence": confidence,
+    }
+    if include_click_point:
+        target["click_point_screen"] = {"x": 260, "y": 290}
+    return {
+        "action_id": "a2",
+        "skill": "click_navigation",
+        "target": target,
+        "params": {},
+        "requires_review": False,
+    }
+
+
 def _resolved_plan(status: str = "ready", actions: list[dict] | None = None) -> dict:
     return {
         "action_plan_id": "action_plan_1",
@@ -116,6 +136,20 @@ def test_request_human_review_action_blocks_execution() -> None:
     assert gate["execution_allowed"] is False
     assert gate["executable_actions"] == []
     assert "request_human_review" in [reason["code"] for reason in gate["block_reasons"]]
+
+
+def test_click_navigation_can_pass_execution_gate() -> None:
+    gate, report = evaluate_execution_gate(
+        _resolved_plan(actions=[_click_action(), _navigation_action()]),
+        _target_report(),
+    )
+
+    assert report["validation_passed"] is True
+    assert gate["execution_allowed"] is True
+    assert [action["skill"] for action in gate["executable_actions"]] == [
+        "click_option",
+        "click_navigation",
+    ]
 
 
 def test_click_option_without_click_point_screen_blocks_execution() -> None:
