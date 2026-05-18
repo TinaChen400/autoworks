@@ -128,6 +128,31 @@ def _navigation_button(source_page: dict) -> dict:
     return {}
 
 
+def _scroll_request(decision: dict, source_page: dict) -> dict:
+    candidates = [
+        decision.get("recommended_scroll"),
+        decision.get("scroll"),
+        source_page.get("recommended_scroll"),
+        source_page.get("scroll"),
+    ]
+    page_meta = source_page.get("page") if isinstance(source_page.get("page"), dict) else {}
+    candidates.extend([page_meta.get("recommended_scroll"), page_meta.get("scroll")])
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        direction = str(candidate.get("direction") or "down").casefold()
+        if direction not in {"up", "down"}:
+            continue
+        try:
+            amount = int(candidate.get("amount") or 3)
+        except (TypeError, ValueError):
+            amount = 3
+        return {"direction": direction, "amount": max(1, min(amount, 10))}
+    if decision.get("needs_scroll") is True or source_page.get("needs_scroll") is True:
+        return {"direction": "down", "amount": 3}
+    return {}
+
+
 def _available_options(question: dict) -> list[dict]:
     options = question.get("answer_options", []) or question.get("options", [])
     return [
@@ -293,6 +318,16 @@ def build_action_plan(source: str = "auto") -> tuple[dict, dict]:
                     f"a{len(actions) + 1}",
                     "click_navigation",
                     _navigation_target(button),
+                )
+            )
+        scroll_request = _scroll_request(decision, source_page)
+        if scroll_request and not actions:
+            actions.append(
+                action(
+                    "a1",
+                    "scroll",
+                    {"source": "page_scroll_request"},
+                    params=scroll_request,
                 )
             )
 

@@ -4,7 +4,13 @@ from copy import deepcopy
 from typing import Any
 
 
-SUPPORTED_REAL_EXECUTION_SKILLS = {"click_option", "click_navigation", "type_text"}
+SUPPORTED_REAL_EXECUTION_SKILLS = {
+    "click_option",
+    "click_navigation",
+    "type_text",
+    "drag",
+    "scroll",
+}
 
 
 def _error(code: str, message: str, action_id: str = "", skill: str = "") -> dict[str, Any]:
@@ -34,6 +40,22 @@ def numeric_click_point_screen(action: dict[str, Any]) -> tuple[int, int] | None
         return None
     try:
         return int(round(float(x))), int(round(float(y)))
+    except (TypeError, ValueError):
+        return None
+
+
+def numeric_screen_point(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        x = value["x"]
+        y = value["y"]
+    except KeyError:
+        return None
+    if isinstance(x, bool) or isinstance(y, bool):
+        return None
+    try:
+        return {"x": int(round(float(x))), "y": int(round(float(y)))}
     except (TypeError, ValueError):
         return None
 
@@ -123,6 +145,42 @@ def action_record(action: dict[str, Any], x: int, y: int, dry_run: bool) -> dict
     }
 
 
+def drag_record(
+    action: dict[str, Any],
+    start: dict[str, int],
+    end: dict[str, int],
+    dry_run: bool,
+) -> dict[str, Any]:
+    return {
+        "action_id": str(action.get("action_id") or ""),
+        "skill": str(action.get("skill") or ""),
+        "start_point_screen": start,
+        "end_point_screen": end,
+        "real_execution": not dry_run,
+        "dry_run": dry_run,
+        "status": "would_drag" if dry_run else "pending",
+    }
+
+
+def scroll_record(action: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    params = action.get("params") if isinstance(action.get("params"), dict) else {}
+    target = _target(action)
+    try:
+        amount = int(params.get("amount") or target.get("amount") or 3)
+    except (TypeError, ValueError):
+        amount = 3
+    return {
+        "action_id": str(action.get("action_id") or ""),
+        "skill": str(action.get("skill") or ""),
+        "direction": str(params.get("direction") or target.get("direction") or "down"),
+        "amount": max(1, min(amount, 10)),
+        "click_point_screen": numeric_screen_point(target.get("click_point_screen")) or {},
+        "real_execution": not dry_run,
+        "dry_run": dry_run,
+        "status": "would_scroll" if dry_run else "pending",
+    }
+
+
 def validate_gate_for_real_execution(gate: dict[str, Any] | None, dry_run: bool) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -162,7 +220,8 @@ def validate_gate_for_real_execution(gate: dict[str, Any] | None, dry_run: bool)
             errors.append(
                 _error(
                     "unsupported_skill",
-                    "Only click_option, click_navigation, and type_text can be executed.",
+                    "Only click_option, click_navigation, type_text, drag, "
+                    "and scroll can be executed.",
                     action_id,
                     skill,
                 )
@@ -173,6 +232,19 @@ def validate_gate_for_real_execution(gate: dict[str, Any] | None, dry_run: bool)
                 _error("missing_text", "type_text action requires params.text.", action_id, skill)
             )
             continue
+        if skill == "scroll":
+            params = action.get("params") if isinstance(action.get("params"), dict) else {}
+            direction = str(params.get("direction") or _target(action).get("direction") or "down")
+            if direction not in {"up", "down"}:
+                errors.append(
+                    _error(
+                        "invalid_scroll_direction",
+                        "scroll direction must be up or down.",
+                        action_id,
+                        skill,
+                    )
+                )
+                continue
         if action.get("requires_review") is not False:
             errors.append(
                 _error(
@@ -187,6 +259,29 @@ def validate_gate_for_real_execution(gate: dict[str, Any] | None, dry_run: bool)
             errors.append(
                 _error("unresolved_action", "Unresolved actions cannot execute.", action_id, skill)
             )
+            continue
+
+        if skill == "drag":
+            target = _target(action)
+            start = numeric_screen_point(
+                target.get("start_point_screen") or target.get("start_point")
+            )
+            end = numeric_screen_point(target.get("end_point_screen") or target.get("end_point"))
+            if start is None or end is None:
+                errors.append(
+                    _error(
+                        "missing_drag_points",
+                        "drag action requires numeric target.start_point_screen "
+                        "and target.end_point_screen.",
+                        action_id,
+                        skill,
+                    )
+                )
+                continue
+            action_records.append(drag_record(action, start, end, dry_run))
+            continue
+        if skill == "scroll":
+            action_records.append(scroll_record(action, dry_run))
             continue
 
         point = numeric_click_point_screen(action)

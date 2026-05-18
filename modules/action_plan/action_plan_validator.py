@@ -24,6 +24,8 @@ VALID_SKILLS = {
     "click_navigation",
     "type_text",
     "select_dropdown",
+    "drag",
+    "scroll",
 }
 
 VALID_STATUSES = {"human_review_required", "ready", "invalid", "no_action"}
@@ -62,10 +64,22 @@ def validate_action_plan(plan: dict) -> dict:
             if skill not in VALID_SKILLS:
                 issues.append({"type": "invalid_skill", "skill": skill})
             target = item.get("target", {})
-            unexpected = sorted(
-                set(target)
-                - {"question_id", "option_id", "option_text", "button_id", "action", "text"}
-            )
+            allowed_target_fields = {
+                "question_id",
+                "option_id",
+                "option_text",
+                "button_id",
+                "action",
+                "text",
+                "direction",
+                "amount",
+                "source",
+                "start_point",
+                "end_point",
+                "start_element_id",
+                "end_element_id",
+            }
+            unexpected = sorted(set(target) - allowed_target_fields)
             if unexpected:
                 issues.append(
                     {

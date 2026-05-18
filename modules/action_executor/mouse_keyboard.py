@@ -9,8 +9,10 @@ INPUT_MOUSE = 0
 INPUT_KEYBOARD = 1
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_WHEEL = 0x0800
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
+VK_BACK = 0x08
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -99,6 +101,34 @@ def left_click() -> None:
         raise MouseKeyboardError(f"SendInput failed with Windows error {error}; sent {sent} events.")
 
 
+def mouse_down() -> None:
+    user32 = _user32()
+    event = INPUT(
+        type=INPUT_MOUSE,
+        union=INPUT_UNION(mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, None)),
+    )
+    sent = user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+    if sent != 1:
+        error = ctypes.get_last_error()
+        raise MouseKeyboardError(
+            f"SendInput mouse_down failed with Windows error {error}; sent {sent} events."
+        )
+
+
+def mouse_up() -> None:
+    user32 = _user32()
+    event = INPUT(
+        type=INPUT_MOUSE,
+        union=INPUT_UNION(mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, None)),
+    )
+    sent = user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+    if sent != 1:
+        error = ctypes.get_last_error()
+        raise MouseKeyboardError(
+            f"SendInput mouse_up failed with Windows error {error}; sent {sent} events."
+        )
+
+
 def click_screen_point(x: int, y: int, pause_ms: int = 120) -> dict[str, int]:
     move_to(x, y)
     if pause_ms > 0:
@@ -111,6 +141,21 @@ def click_screen_point(x: int, y: int, pause_ms: int = 120) -> dict[str, int]:
         )
     left_click()
     return actual_position
+
+
+def scroll_wheel(delta: int) -> None:
+    user32 = _user32()
+    mouse_data = ctypes.c_ulong(int(delta) & 0xFFFFFFFF).value
+    event = INPUT(
+        type=INPUT_MOUSE,
+        union=INPUT_UNION(mi=MOUSEINPUT(0, 0, mouse_data, MOUSEEVENTF_WHEEL, 0, None)),
+    )
+    sent = user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+    if sent != 1:
+        error = ctypes.get_last_error()
+        raise MouseKeyboardError(
+            f"SendInput scroll failed with Windows error {error}; sent {sent} events."
+        )
 
 
 def _send_unicode_char(char: str) -> None:
@@ -143,3 +188,23 @@ def type_text(text: str, pause_ms: int = 0) -> None:
         _send_unicode_char(char)
         if pause_ms > 0:
             time.sleep(pause_ms / 1000.0)
+
+
+def press_backspace() -> None:
+    user32 = _user32()
+    inputs = (INPUT * 2)(
+        INPUT(
+            type=INPUT_KEYBOARD,
+            union=INPUT_UNION(ki=KEYBDINPUT(VK_BACK, 0, 0, 0, None)),
+        ),
+        INPUT(
+            type=INPUT_KEYBOARD,
+            union=INPUT_UNION(ki=KEYBDINPUT(VK_BACK, 0, KEYEVENTF_KEYUP, 0, None)),
+        ),
+    )
+    sent = user32.SendInput(len(inputs), ctypes.byref(inputs), ctypes.sizeof(INPUT))
+    if sent != len(inputs):
+        error = ctypes.get_last_error()
+        raise MouseKeyboardError(
+            f"SendInput backspace failed with Windows error {error}; sent {sent} events."
+        )

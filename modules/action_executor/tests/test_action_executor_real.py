@@ -23,6 +23,15 @@ class FakeMouse:
     def type_text(self, text: str) -> None:
         self.typed.append(text)
 
+    def drag_screen_points(self, start_point: dict, end_point: dict, pause_ms: int = 120) -> dict:
+        self.calls.append((start_point["x"], start_point["y"], pause_ms))
+        self.calls.append((end_point["x"], end_point["y"], pause_ms))
+        return {"start_position": start_point, "end_position": end_point}
+
+    def scroll(self, amount: int, x: int | None = None, y: int | None = None) -> dict:
+        self.calls.append((x or 0, amount, 0))
+        return {"x": x or 0, "y": y or 0}
+
 
 class FakeCapture:
     def __init__(self, runtime: Path) -> None:
@@ -102,6 +111,29 @@ def _text_action() -> dict:
     action = _action(skill="type_text")
     action["params"] = {"text": "Helpful setup guidance."}
     return action
+
+
+def _drag_action() -> dict:
+    return {
+        "action_id": "a3",
+        "skill": "drag",
+        "target": {
+            "start_point_screen": {"x": 100, "y": 120},
+            "end_point_screen": {"x": 300, "y": 320},
+        },
+        "params": {},
+        "requires_review": False,
+    }
+
+
+def _scroll_action() -> dict:
+    return {
+        "action_id": "a4",
+        "skill": "scroll",
+        "target": {"click_point_screen": {"x": 400, "y": 500}},
+        "params": {"direction": "down", "amount": 4},
+        "requires_review": False,
+    }
 
 
 def _gate(allowed: bool = True, actions: list[dict] | None = None) -> dict:
@@ -239,6 +271,31 @@ def test_type_text_clicks_field_and_types_text(tmp_path: Path) -> None:
     assert report["validation_passed"] is True
     assert report["executed_action_count"] == 1
     assert report["action_records"][0]["status"] == "typed"
+
+
+def test_drag_executes_start_to_end_points(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True, [_drag_action()]))
+    fake_mouse = FakeMouse()
+
+    _run_payload, report = run("auto", runtime_dir=runtime, mouse_api=fake_mouse, pause_ms=5)
+
+    assert fake_mouse.calls == [(100, 120, 5), (300, 320, 5)]
+    assert report["validation_passed"] is True
+    assert report["action_records"][0]["status"] == "dragged"
+
+
+def test_scroll_executes_and_counts_as_action(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime_state"
+    _write_json(runtime / "latest_execution_gate.json", _gate(True, [_scroll_action()]))
+    fake_mouse = FakeMouse()
+
+    _run_payload, report = run("auto", runtime_dir=runtime, mouse_api=fake_mouse)
+
+    assert fake_mouse.calls == [(400, -4, 0)]
+    assert report["validation_passed"] is True
+    assert report["executed_action_count"] == 1
+    assert report["action_records"][0]["status"] == "scrolled"
 
 
 def test_verified_click_stops_after_selected_candidate(tmp_path: Path) -> None:

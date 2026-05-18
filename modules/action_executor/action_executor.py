@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from . import mouse_keyboard
+from .human_simulator import HumanSimulator, HumanSimulatorConfig
 from .schema import utc_now_iso
 from .selection_verifier import verify_selected_state
 from .safety_guard import validate_gate_for_real_execution
@@ -114,6 +115,52 @@ def _execute_record(
     verify_click: bool,
     post_click_pause_ms: int,
 ) -> tuple[bool, dict[str, Any] | None]:
+    if record.get("skill") == "scroll":
+        direction = str(record.get("direction") or "down")
+        amount = int(record.get("amount") or 3)
+        signed_amount = -abs(amount) if direction == "down" else abs(amount)
+        point = (
+            record.get("click_point_screen")
+            if isinstance(record.get("click_point_screen"), dict)
+            else {}
+        )
+        try:
+            actual_position = mouse_api.scroll(
+                signed_amount,
+                point.get("x") if point else None,
+                point.get("y") if point else None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            record["status"] = "scroll_failed"
+            return False, {
+                "code": "scroll_failed",
+                "message": str(exc),
+                "action_id": record.get("action_id", ""),
+            }
+        if isinstance(actual_position, dict):
+            record["actual_cursor_position"] = actual_position
+        record["status"] = "scrolled"
+        return True, None
+
+    if record.get("skill") == "drag":
+        try:
+            result = mouse_api.drag_screen_points(
+                record["start_point_screen"],
+                record["end_point_screen"],
+                pause_ms=pause_ms,
+            )
+        except Exception as exc:  # noqa: BLE001
+            record["status"] = "drag_failed"
+            return False, {
+                "code": "drag_failed",
+                "message": str(exc),
+                "action_id": record.get("action_id", ""),
+            }
+        if isinstance(result, dict):
+            record.update(result)
+        record["status"] = "dragged"
+        return True, None
+
     if record.get("skill") == "type_text":
         point = _candidate_point(
             {
@@ -282,6 +329,8 @@ def run(
     verifier_api: Any = None,
     verify_click: bool = True,
     post_click_pause_ms: int = 250,
+    simulator_api: Any = None,
+    human_config: HumanSimulatorConfig | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     _ = source
     gate_path, run_path, report_path = (
@@ -307,12 +356,13 @@ def run(
             executed_action_count = len(action_records)
         else:
             runtime = RUNTIME_DIR if runtime_dir is None else Path(runtime_dir)
+            simulator = simulator_api or HumanSimulator(mouse_api=mouse_api, config=human_config)
             for record in action_records:
                 clicked, error = _execute_record(
                     record,
                     runtime=runtime,
                     pause_ms=pause_ms,
-                    mouse_api=mouse_api,
+                    mouse_api=simulator,
                     capture_api=capture_api,
                     verifier_api=verifier_api,
                     verify_click=verify_click,
@@ -371,13 +421,24 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--pause-ms", type=int, default=120)
     parser.add_argument("--post-click-pause-ms", type=int, default=250)
     parser.add_argument("--skip-verify", action="store_true")
+    parser.add_argument("--no-humanize-mouse", action="store_true")
+    parser.add_argument("--no-humanize-typing", action="store_true")
+    parser.add_argument("--nondeterministic", action="store_true")
+    parser.add_argument("--typo-rate", type=float, default=0.0)
     args = parser.parse_args(argv)
+    human_config = HumanSimulatorConfig(
+        humanize_mouse=not args.no_humanize_mouse,
+        humanize_typing=not args.no_humanize_typing,
+        deterministic=not args.nondeterministic,
+        typo_rate=max(0.0, min(1.0, args.typo_rate)),
+    )
     run_payload, report = run(
         args.source,
         dry_run=args.dry_run,
         pause_ms=args.pause_ms,
         post_click_pause_ms=args.post_click_pause_ms,
         verify_click=not args.skip_verify,
+        human_config=human_config,
     )
     print(
         "Saved runtime_state/latest_action_executor_run.json "

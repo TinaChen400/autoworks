@@ -15,6 +15,20 @@ def _click_point_screen_present(action: dict[str, Any]) -> bool:
     return isinstance(click_point, dict) and "x" in click_point and "y" in click_point
 
 
+def _drag_points_present(action: dict[str, Any]) -> bool:
+    target = action.get("target") if isinstance(action.get("target"), dict) else {}
+    start = target.get("start_point_screen") or target.get("start_point")
+    end = target.get("end_point_screen") or target.get("end_point")
+    return (
+        isinstance(start, dict)
+        and "x" in start
+        and "y" in start
+        and isinstance(end, dict)
+        and "x" in end
+        and "y" in end
+    )
+
+
 def _resolver_confidence(action: dict[str, Any]) -> float:
     target = action.get("target") if isinstance(action.get("target"), dict) else {}
     try:
@@ -73,7 +87,7 @@ def evaluate_execution_gate(
             )
             continue
 
-        if skill in {"click_option", "click_navigation"}:
+        if skill in {"click_option", "click_navigation", "type_text"}:
             if not _click_point_screen_present(action):
                 block_reasons.append(
                     block_reason(
@@ -95,6 +109,34 @@ def evaluate_execution_gate(
                         "threshold": resolver_confidence_threshold,
                     }
                 )
+        elif skill == "drag":
+            if not _drag_points_present(action):
+                block_reasons.append(
+                    block_reason(
+                        "missing_drag_points",
+                        "drag action is missing start_point_screen or end_point_screen.",
+                        action_id,
+                    )
+                )
+        elif skill == "scroll":
+            params = action.get("params") if isinstance(action.get("params"), dict) else {}
+            direction = str(params.get("direction") or "down")
+            if direction not in {"up", "down"}:
+                block_reasons.append(
+                    block_reason(
+                        "invalid_scroll_direction",
+                        "scroll direction must be up or down.",
+                        action_id,
+                    )
+                )
+        else:
+            block_reasons.append(
+                block_reason(
+                    "unsupported_skill",
+                    f"{skill} is not supported for real execution.",
+                    action_id,
+                )
+            )
 
     execution_allowed = not block_reasons
     executable_actions = deepcopy(actions) if execution_allowed else []

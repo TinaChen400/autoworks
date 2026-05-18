@@ -136,6 +136,14 @@ def _decision(requires_human_review: bool, option_ids: list[str]) -> dict:
     }
 
 
+def _scroll_decision() -> dict:
+    decision = _decision(False, [])
+    decision["question_decisions"] = []
+    decision["needs_scroll"] = True
+    decision["recommended_scroll"] = {"direction": "down", "amount": 4}
+    return decision
+
+
 def _two_question_session() -> dict:
     session = _session("single_choice")
     question = session["pages"][0]["questions"][0]
@@ -320,6 +328,23 @@ def test_ready_plan_appends_navigation_action_when_available(tmp_path, monkeypat
         "action": "next_page",
         "text": "Next",
     }
+
+
+def test_ready_plan_can_generate_scroll_action(tmp_path, monkeypatch):
+    _patch_paths(monkeypatch, tmp_path)
+    _write_json(tmp_path / "runtime_state" / "latest_survey_session.json", _session())
+    _write_json(tmp_path / "runtime_state" / "latest_answer_decision.json", _scroll_decision())
+    _write_json(
+        tmp_path / "runtime_state" / "latest_answer_engine_report.json",
+        {"validation_passed": True, "issues": [], "warnings": [], "requires_human_review": False},
+    )
+
+    plan, report = action_plan_builder.build_action_plan("auto")
+
+    assert report["validation_passed"] is True
+    assert plan["status"] == "ready"
+    assert [item["skill"] for item in plan["actions"]] == ["scroll"]
+    assert plan["actions"][0]["params"] == {"direction": "down", "amount": 4}
 
 
 def test_coordinates_are_never_written_to_latest_action_plan(tmp_path, monkeypatch):

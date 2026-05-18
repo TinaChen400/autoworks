@@ -72,6 +72,29 @@ def _navigation_action(confidence: float = 0.8, include_click_point: bool = True
     }
 
 
+def _drag_action() -> dict:
+    return {
+        "action_id": "a3",
+        "skill": "drag",
+        "target": {
+            "start_point_screen": {"x": 100, "y": 120},
+            "end_point_screen": {"x": 300, "y": 320},
+        },
+        "params": {},
+        "requires_review": False,
+    }
+
+
+def _scroll_action() -> dict:
+    return {
+        "action_id": "a4",
+        "skill": "scroll",
+        "target": {},
+        "params": {"direction": "down", "amount": 3},
+        "requires_review": False,
+    }
+
+
 def _resolved_plan(status: str = "ready", actions: list[dict] | None = None) -> dict:
     return {
         "action_plan_id": "action_plan_1",
@@ -150,6 +173,17 @@ def test_click_navigation_can_pass_execution_gate() -> None:
         "click_option",
         "click_navigation",
     ]
+
+
+def test_drag_and_scroll_can_pass_execution_gate() -> None:
+    gate, report = evaluate_execution_gate(
+        _resolved_plan(actions=[_drag_action(), _scroll_action()]),
+        _target_report(),
+    )
+
+    assert report["validation_passed"] is True
+    assert gate["execution_allowed"] is True
+    assert [action["skill"] for action in gate["executable_actions"]] == ["drag", "scroll"]
 
 
 def test_click_option_without_click_point_screen_blocks_execution() -> None:
